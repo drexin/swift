@@ -76,6 +76,8 @@ foreach(sdk ${DISPATCH_SDKS})
     ExternalProject_Add("${LIBDISPATCH_VARIANT_NAME}"
                         SOURCE_DIR
                           "${SWIFT_PATH_TO_LIBDISPATCH_SOURCE}"
+                        INSTALL_DIR
+                          "${SWIFT_BINARY_DIR}/${LIBDISPATCH_VARIANT_NAME}"
                         CMAKE_ARGS
                           -DCMAKE_AR=${CMAKE_AR}
                           -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
@@ -152,6 +154,8 @@ foreach(sdk ${DISPATCH_SDKS})
       ExternalProject_Add("${LIBDISPATCH_STATIC_VARIANT_NAME}"
                           SOURCE_DIR
                             "${SWIFT_PATH_TO_LIBDISPATCH_SOURCE}"
+                          INSTALL_DIR
+                            "${SWIFT_BINARY_DIR}/${LIBDISPATCH_STATIC_VARIANT_NAME}"
                           CMAKE_ARGS
                             -DCMAKE_AR=${CMAKE_AR}
                             -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
