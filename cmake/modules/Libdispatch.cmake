@@ -77,7 +77,7 @@ foreach(sdk ${DISPATCH_SDKS})
                         SOURCE_DIR
                           "${SWIFT_PATH_TO_LIBDISPATCH_SOURCE}"
                         INSTALL_DIR
-                          "${SWIFT_BINARY_DIR}/${LIBDISPATCH_VARIANT_NAME}"
+                          "${SWIFT_BINARY_DIR}/swift-${SWIFT_HOST_VARIANT}-${SWIFT_HOST_VARIANT_ARCH}/${LIBDISPATCH_VARIANT_NAME}"
                         CMAKE_ARGS
                           -DCMAKE_AR=${CMAKE_AR}
                           -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
@@ -155,7 +155,7 @@ foreach(sdk ${DISPATCH_SDKS})
                           SOURCE_DIR
                             "${SWIFT_PATH_TO_LIBDISPATCH_SOURCE}"
                           INSTALL_DIR
-                            "${SWIFT_BINARY_DIR}/${LIBDISPATCH_STATIC_VARIANT_NAME}"
+                            "${SWIFT_BINARY_DIR}/swift-${SWIFT_HOST_VARIANT}-${SWIFT_HOST_VARIANT_ARCH}/${LIBDISPATCH_STATIC_VARIANT_NAME}"
                           CMAKE_ARGS
                             -DCMAKE_AR=${CMAKE_AR}
                             -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
