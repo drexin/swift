@@ -6577,5 +6577,14 @@ ERROR(type_wrapper_ignored_on_static_properties,none,
 ERROR(type_wrapper_ignored_on_lazy_properties,none,
       "%0 must not be used on lazy properties", (DeclAttribute))
 
+
+//------------------------------------------------------------------------------
+// MARK: Type erasure
+//------------------------------------------------------------------------------
+
+ERROR(no_metadata_on_non_generic_param, none,
+      "'@_noMetadata' must appear on a generic parameter",
+      ())
+
 #define UNDEFINE_DIAGNOSTIC_MACROS
 #include "DefineDiagnosticMacros.h"

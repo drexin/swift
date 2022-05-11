@@ -57,6 +57,7 @@ TYPE_ATTR(async)
 TYPE_ATTR(Sendable)
 TYPE_ATTR(unchecked)
 TYPE_ATTR(_typeSequence)
+TYPE_ATTR(_noMetadata)
 TYPE_ATTR(_local)
 
 // SIL-specific attributes
@@ -442,7 +443,12 @@ DECL_ATTR(_typeSequence, TypeSequence,
   NotSerialized |
   ABIBreakingToAdd | ABIBreakingToRemove | APIBreakingToAdd | APIBreakingToRemove,
   71)
-// NOTE: 72 is unused
+DECL_ATTR(_noMetadata, NoMetadata,
+  OnGenericTypeParam |
+  UserInaccessible |
+  NotSerialized |
+  ABIStableToAdd | ABIBreakingToRemove | APIStableToAdd | APIStableToRemove,
+  72)
 DECL_ATTR(_optimize, Optimize,
   OnAbstractFunction | OnSubscript | OnVar |
   UserInaccessible |
