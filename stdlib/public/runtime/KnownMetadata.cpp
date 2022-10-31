@@ -279,7 +279,7 @@ const ValueWitnessTable swift::VALUE_WITNESS_SYM(EMPTY_TUPLE_MANGLING) =
 // Define some builtin opaque metadata.
 #define OPAQUE_METADATA(TYPE) \
   const FullOpaqueMetadata swift::METADATA_SYM(TYPE) = { \
-    { &VALUE_WITNESS_SYM(TYPE) },                             \
+    { {nullptr}, {&VALUE_WITNESS_SYM(TYPE)} },                             \
     { { MetadataKind::Opaque } }                 \
   };
 #define BUILTIN_TYPE(Symbol, Name) \
@@ -292,7 +292,7 @@ const ValueWitnessTable swift::VALUE_WITNESS_SYM(EMPTY_TUPLE_MANGLING) =
 /// The standard metadata for the empty tuple.
 const FullMetadata<TupleTypeMetadata> swift::
 METADATA_SYM(EMPTY_TUPLE_MANGLING) = {
-  { &VALUE_WITNESS_SYM(EMPTY_TUPLE_MANGLING) },                 // ValueWitnesses
+  { {nullptr}, {&VALUE_WITNESS_SYM(EMPTY_TUPLE_MANGLING)} },                 // ValueWitnesses
   {
     { MetadataKind::Tuple },   // Kind
     0,                         // NumElements

@@ -3731,7 +3731,7 @@ OpaqueExistentialValueWitnesses_1 =
 /// The standard metadata for Any.
 const FullMetadata<ExistentialTypeMetadata> swift::
 METADATA_SYM(ANY_MANGLING) = {
-  { &OpaqueExistentialValueWitnesses_0 }, // ValueWitnesses
+  { {(const uint8_t*)0xc0ffee}, {&OpaqueExistentialValueWitnesses_0} }, // ValueWitnesses
   ExistentialTypeMetadata(
     ExistentialTypeFlags() // Flags
       .withNumWitnessTables(0)
@@ -3744,10 +3744,11 @@ METADATA_SYM(ANY_MANGLING) = {
 const FullMetadata<ExistentialTypeMetadata> swift::
 METADATA_SYM(ANYOBJECT_MANGLING) = {
   {
+    {(const uint8_t*)0xbeefbeef},
 #if SWIFT_OBJC_INTEROP
-    &VALUE_WITNESS_SYM(BO)
+    {&VALUE_WITNESS_SYM(BO)}
 #else
-    &VALUE_WITNESS_SYM(Bo)
+    {&VALUE_WITNESS_SYM(Bo)}
 #endif
   },
   ExistentialTypeMetadata(
@@ -4086,7 +4087,6 @@ swift::swift_getExistentialTypeMetadata(
                                   const Metadata *superclassConstraint,
                                   size_t numProtocols,
                                   const ProtocolDescriptorRef *protocols) {
-
   // The empty compositions Any and AnyObject have fixed metadata.
   if (numProtocols == 0 && !superclassConstraint) {
     switch (classConstraint) {
@@ -4323,11 +4323,12 @@ public:
   };
 
   ExtendedExistentialTypeCacheEntry(Key key)
-      : Data{{getOrCreateVWT(key)}, key.Shape} {
+      : Data{ TargetTypeMetadataHeader<InProcess>({getOrCreateTypeLayout(key)}, {getOrCreateVWT(key)}), key.Shape} {
     key.Arguments.installInto(Data.getTrailingObjects<const void *>());
   }
 
   static const ValueWitnessTable *getOrCreateVWT(Key key);
+  static const uint8_t *getOrCreateTypeLayout(Key key);
 
   intptr_t getKeyIntValueForDump() {
     return 0;
@@ -4428,6 +4429,12 @@ ExtendedExistentialTypeCacheEntry::getOrCreateVWT(Key key) {
   // We can support back-deployment of new special kinds (at least here)
   // if we just require them to provide suggested value witnesses.
   swift_unreachable("shape with unknown special kind had no suggested VWT");
+}
+
+const uint8_t *
+ExtendedExistentialTypeCacheEntry::getOrCreateTypeLayout(Key key) {
+  // TODO: implement
+  return (uint8_t*)0xdeadbeef;
 }
 
 /// The uniquing structure for extended existential type metadata.

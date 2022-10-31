@@ -3587,6 +3587,11 @@ namespace {
       B.add(metadata);
     }
 
+    void addLayoutStringPointer() {
+      // TODO: really add the pointer
+      B.addNullPointer(IGM.Int8PtrTy);
+    }
+
     void addDestructorFunction() {
       if (asImpl().getFieldLayout().hasObjCImplementation())
         return;
@@ -3949,6 +3954,11 @@ namespace {
       B.addRelativeAddressOrNull(nullptr);
     }
 
+    void addLayoutStringPointer() {
+      // TODO: really add the pointer
+      B.addNullPointer(IGM.Int8PtrTy);
+    }
+
     void addDestructorFunction() {
       if (FieldLayout.hasObjCImplementation())
         return;
@@ -4085,6 +4095,11 @@ namespace {
       emitClassMetadataBaseOffset(IGM, Target);
 
       super::emitInstantiationDefinitions();
+    }
+
+    void addLayoutStringPointer() {
+      // TODO: really add the pointer
+      B.addNullPointer(IGM.Int8PtrTy);
     }
 
     void addDestructorFunction() {
@@ -4774,6 +4789,11 @@ namespace {
       return emitValueWitnessTable(relativeReference);
     }
 
+    void addLayoutStringPointer() {
+      // TODO: really add the pointer
+      B.addNullPointer(IGM.Int8PtrTy);
+    }
+
     void addValueWitnessTable() {
       B.add(asImpl().getValueWitnessTable(false).getValue());
     }
@@ -5146,6 +5166,11 @@ namespace {
 
     ConstantReference getValueWitnessTable(bool relativeReference) {
       return emitValueWitnessTable(relativeReference);
+    }
+
+    void addLayoutStringPointer() {
+      // TODO: really add the pointer
+      B.addNullPointer(IGM.Int8PtrTy);
     }
 
     void addValueWitnessTable() {

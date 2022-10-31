@@ -34,6 +34,7 @@
 #include "ConstantBuilder.h"
 #include "Explosion.h"
 #include "GenClass.h"
+#include "GenMeta.h"
 #include "GenPointerAuth.h"
 #include "GenProto.h"
 #include "GenType.h"
