@@ -292,7 +292,7 @@ const ValueWitnessTable swift::VALUE_WITNESS_SYM(EMPTY_TUPLE_MANGLING) =
 /// The standard metadata for the empty tuple.
 const FullMetadata<TupleTypeMetadata> swift::
 METADATA_SYM(EMPTY_TUPLE_MANGLING) = {
-  { {nullptr}, {&VALUE_WITNESS_SYM(EMPTY_TUPLE_MANGLING)} },                 // ValueWitnesses
+  { &VALUE_WITNESS_SYM(EMPTY_TUPLE_MANGLING) },                 // ValueWitnesses
   {
     { MetadataKind::Tuple },   // Kind
     0,                         // NumElements

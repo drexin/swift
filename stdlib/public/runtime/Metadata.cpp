@@ -1525,7 +1525,7 @@ static Lazy<TupleCache> TupleTypes;
 /// Given a metatype pointer, produce the value-witness table for it.
 /// This is equivalent to metatype->ValueWitnesses but more efficient.
 static const ValueWitnessTable *tuple_getValueWitnesses(const Metadata *metatype) {
-  return ((const ValueWitnessTable*) asFullMetadata(metatype)) - 1;
+  return asFullMetadata(metatype)->ValueWitnesses;
 }
 
 /// Generic tuple value witness for 'projectBuffer'.
@@ -3731,7 +3731,7 @@ OpaqueExistentialValueWitnesses_1 =
 /// The standard metadata for Any.
 const FullMetadata<ExistentialTypeMetadata> swift::
 METADATA_SYM(ANY_MANGLING) = {
-  { {(const uint8_t*)0xc0ffee}, {&OpaqueExistentialValueWitnesses_0} }, // ValueWitnesses
+  { &OpaqueExistentialValueWitnesses_0 }, // ValueWitnesses
   ExistentialTypeMetadata(
     ExistentialTypeFlags() // Flags
       .withNumWitnessTables(0)
@@ -3744,11 +3744,10 @@ METADATA_SYM(ANY_MANGLING) = {
 const FullMetadata<ExistentialTypeMetadata> swift::
 METADATA_SYM(ANYOBJECT_MANGLING) = {
   {
-    {(const uint8_t*)0xbeefbeef},
 #if SWIFT_OBJC_INTEROP
-    {&VALUE_WITNESS_SYM(BO)}
+    &VALUE_WITNESS_SYM(BO)
 #else
-    {&VALUE_WITNESS_SYM(Bo)}
+    &VALUE_WITNESS_SYM(Bo)
 #endif
   },
   ExistentialTypeMetadata(

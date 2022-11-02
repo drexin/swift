@@ -1168,10 +1168,10 @@ static llvm::Constant *emitEmptyTupleTypeMetadataRef(IRGenModule &IGM) {
   llvm::Constant *fullMetadata = IGM.getEmptyTupleMetadata();
   llvm::Constant *indices[] = {
     llvm::ConstantInt::get(IGM.Int32Ty, 0),
-    llvm::ConstantInt::get(IGM.Int32Ty, MetadataAdjustmentIndex::ValueType)
+    llvm::ConstantInt::get(IGM.Int32Ty, 1)
   };
   return llvm::ConstantExpr::getInBoundsGetElementPtr(
-      IGM.FullTypeMetadataStructTy, fullMetadata, indices);
+      IGM.FullExistentialTypeMetadataStructTy, fullMetadata, indices);
 }
 
 using GetElementMetadataFn =
@@ -1794,11 +1794,11 @@ namespace {
       
       llvm::Constant *indices[] = {
         llvm::ConstantInt::get(IGF.IGM.Int32Ty, 0),
-        llvm::ConstantInt::get(IGF.IGM.Int32Ty, MetadataAdjustmentIndex::ValueType)
+        llvm::ConstantInt::get(IGF.IGM.Int32Ty, 1)
       };
       return MetadataResponse::forComplete(
           llvm::ConstantExpr::getInBoundsGetElementPtr(
-              IGF.IGM.FullTypeMetadataStructTy, singletonMetadata, indices));
+              IGF.IGM.FullExistentialTypeMetadataStructTy, singletonMetadata, indices));
     }
 
     llvm::Value *emitExistentialTypeMetadata(CanExistentialType type) {
