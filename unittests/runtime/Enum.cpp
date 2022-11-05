@@ -73,7 +73,7 @@ ValueWitnessTable Int8WithExtraInhabitantValueWitness = {
 };
 
 FullMetadata<OpaqueMetadata> XI_TMBi8_ = {
-  {{nullptr}, {&Int8WithExtraInhabitantValueWitness}},
+  {&Int8WithExtraInhabitantValueWitness},
   {{MetadataKind::Opaque}}
 };
 

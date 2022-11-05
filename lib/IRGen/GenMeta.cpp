@@ -5170,7 +5170,7 @@ namespace {
 
     void addLayoutStringPointer() {
       // TODO: really add the pointer
-      B.addNullPointer(IGM.Int8PtrTy);
+      B.add(llvm::Constant::getIntegerValue(IGM.Int8PtrTy, APInt(64, 0x13371337)));
     }
 
     void addValueWitnessTable() {
@@ -5596,6 +5596,10 @@ namespace {
 
     // Visitor methods.
 
+    void addLayoutStringPointer() {
+      B.addNullPointer(IGM.Int8PtrTy);
+    }
+
     void addValueWitnessTable() {
       assert(!getTargetType()->isForeignReferenceType());
 
@@ -5687,6 +5691,10 @@ namespace {
     }
 
     // Visitor methods.
+
+    void addLayoutStringPointer() {
+      B.addNullPointer(IGM.Int8PtrTy);
+    }
 
     void addValueWitnessTable() {
       auto type = getTargetType()->getCanonicalType();

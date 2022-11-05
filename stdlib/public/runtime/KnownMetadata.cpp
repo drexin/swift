@@ -279,7 +279,7 @@ const ValueWitnessTable swift::VALUE_WITNESS_SYM(EMPTY_TUPLE_MANGLING) =
 // Define some builtin opaque metadata.
 #define OPAQUE_METADATA(TYPE) \
   const FullOpaqueMetadata swift::METADATA_SYM(TYPE) = { \
-    { {nullptr}, {&VALUE_WITNESS_SYM(TYPE)} },                             \
+    { &VALUE_WITNESS_SYM(TYPE) },                             \
     { { MetadataKind::Opaque } }                 \
   };
 #define BUILTIN_TYPE(Symbol, Name) \
