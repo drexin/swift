@@ -319,6 +319,10 @@ public:
   void setValueWitnesses(const ValueWitnessTable *table) {
     asFullMetadata(this)->ValueWitnesses = table;
   }
+
+  void setLayoutString(const uint8_t *layoutString) {
+    asFullMetadata(this)->layoutString = layoutString;
+  }
   
   // Define forwarders for value witnesses. These invoke this metadata's value
   // witness table with itself as the 'self' parameter.
@@ -3640,6 +3644,10 @@ public:
 
   bool hasCanonicalMetadataPrespecializations() const {
     return getTypeContextDescriptorFlags().hasCanonicalMetadataPrespecializations();
+  }
+
+  bool hasLayoutString() const {
+    return getTypeContextDescriptorFlags().hasLayoutString();
   }
 
   /// Given that this type has foreign metadata initialization, return the
