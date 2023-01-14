@@ -37,7 +37,7 @@ using namespace swift;
 #define MASK_PTR(x)                                                            \
   ((__swift_uintptr_t)x & ~heap_object_abi::SwiftSpareBitsMask)
 
-static const size_t layoutStringHeaderSize = 32;
+static const size_t layoutStringHeaderSize = 4;
 
 /// Get the generic argument vector for the passed in metadata
 ///
@@ -189,11 +189,9 @@ swift_generic_initWithCopy(void *dest, void *src, void *metadata) {
   Metadata *typedMetadata = (Metadata *)metadata;
   const uint8_t *typeLayout = typedMetadata->getLayoutString();
 
-  size_t offset = 13;
-  size_t size = readBytes<uint32_t>(typeLayout, offset);
+  size_t size = typedMetadata->vw_size();
 
-  // fixed data is 32 bytes
-  offset = layoutStringHeaderSize;
+  auto offset = layoutStringHeaderSize;
 
   memcpy(dest, src, size);
 
@@ -225,8 +223,7 @@ __attribute__((weak)) extern "C" void
 swift_generic_initWithTake(void *dest, void *src, void *metadata) {
   Metadata *typedMetadata = (Metadata *)metadata;
   const uint8_t *typeLayout = typedMetadata->getLayoutString();
-  size_t offset = 13;
-  size_t size = readBytes<uint32_t>(typeLayout, offset);
+  size_t size = typedMetadata->vw_size();
 
   memcpy(dest, src, size);
 
@@ -234,7 +231,7 @@ swift_generic_initWithTake(void *dest, void *src, void *metadata) {
     return;
   }
 
-  offset = layoutStringHeaderSize;
+  auto offset = layoutStringHeaderSize;
   uintptr_t addrOffset = 0;
 
   do {
@@ -286,7 +283,7 @@ swift_generic_assignWithTake(void *dest, void *src, void *metadata) {
 __attribute__((weak)) extern "C" void
 swift_generic_instantiateLayoutString(const uint8_t* layoutStr,
                                       Metadata* type) {
-  size_t offset = 25;
+  size_t offset = 0;
   const auto refCountSize = readBytes<uint32_t>(layoutStr, offset);
 
   const size_t genericDescOffset = layoutStringHeaderSize + refCountSize + 4;
@@ -317,8 +314,7 @@ swift_generic_instantiateLayoutString(const uint8_t* layoutStr,
 
   uint8_t *instancedLayoutStr = (uint8_t*)calloc(instancedLayoutStrSize, sizeof(uint8_t));
 
-  writeBytes<uint32_t>(instancedLayoutStr, 13, type->vw_size());
-  writeBytes<uint32_t>(instancedLayoutStr, 25, refCountSize + genericRefCountSize);
+  writeBytes<uint32_t>(instancedLayoutStr, 0, refCountSize + genericRefCountSize);
 
   offset = genericDescOffset;
   size_t layoutStrOffset = layoutStringHeaderSize;
@@ -345,7 +341,7 @@ swift_generic_instantiateLayoutString(const uint8_t* layoutStr,
       const Metadata* genericType = getGenericArgs(type)[index];
       if (genericType->getTypeContextDescriptor()->hasLayoutString()) {
         const uint8_t *genericLayoutStr = genericType->getLayoutString();
-        size_t countOffset = 25;
+        size_t countOffset = 0;
         auto genericRefCountSize = readBytes<uint32_t>(genericLayoutStr, countOffset);
         if (genericRefCountSize > 0) {
           memcpy((void*)(genericLayoutStr + layoutStringHeaderSize), (void*)(instancedLayoutStr + instancedLayoutStrOffset), genericRefCountSize);
@@ -400,6 +396,12 @@ swift_generic_instantiateLayoutString(const uint8_t* layoutStr,
   }
 
   type->setLayoutString(instancedLayoutStr);
+
+  fprintf(stderr, "==== Instantiated: ");
+  for (size_t i = 0; i < instancedLayoutStrSize; i++) {
+    fprintf(stderr, "\\%02x", instancedLayoutStr[i]);
+  }
+  fprintf(stderr, "\n");
 }
 
 // Allow this library to get force-loaded by autolinking
