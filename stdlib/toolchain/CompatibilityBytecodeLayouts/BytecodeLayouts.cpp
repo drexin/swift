@@ -141,7 +141,6 @@ swift_generic_destroy(void *address, void *metadata) {
       } else {
         destroyFunc.fn(((void*)addr));
       }
-      addr += sizeof(void*);
     }
   } while (typeLayout[offset] != 0);
 }
@@ -214,7 +213,6 @@ swift_generic_initWithCopy(void *dest, void *src, void *metadata) {
       } else {
         ((CopyInitFn)retainFunc.fn)((void*)((uintptr_t)dest + addrOffset), (void*)((uintptr_t)src + addrOffset));
       }
-      addrOffset += sizeof(void*);
     }
   } while (typeLayout[offset] != 0);
 }
@@ -244,12 +242,10 @@ swift_generic_initWithTake(void *dest, void *src, void *metadata) {
     case RefCountingKind::NativeWeak:
       swift_weakTakeInit((WeakReference*)((uintptr_t)dest + addrOffset),
                          (WeakReference*)((uintptr_t)src + addrOffset));
-      addrOffset += sizeof(void*);
       break;
     case RefCountingKind::UnknownWeak:
       swift_unknownObjectWeakTakeInit((WeakReference*)((uintptr_t)dest + addrOffset),
                                       (WeakReference*)((uintptr_t)src + addrOffset));
-      addrOffset += sizeof(void*);
       break;
     case RefCountingKind::Witness: {
       auto typePtr = readBytes<uintptr_t>(typeLayout, offset);
@@ -262,7 +258,6 @@ swift_generic_initWithTake(void *dest, void *src, void *metadata) {
       break;
     }
     default:
-      addrOffset += sizeof(void*);
       break;
     }
   } while (typeLayout[offset] != 0);
