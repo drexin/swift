@@ -71,6 +71,12 @@ Metadata *getExistentialTypeMetadata(OpaqueValue *object) {
   return reinterpret_cast<Metadata**>(object)[NumWords_ValueBuffer];
 }
 
+const Metadata *getResilientTypeMetadata(const uint8_t *layoutStr, size_t &offset) {
+  auto metadataAddr = reinterpret_cast<const RelativeIndirectablePointer<Metadata>*>(layoutStr + offset);
+  offset += sizeof(uint32_t);
+  return metadataAddr->get();
+}
+
 typedef void (*DestrFn)(void*);
 
 struct DestroyFuncAndMask {
@@ -129,9 +135,13 @@ swift_generic_destroy(void *address, void *metadata) {
 
     if (SWIFT_UNLIKELY(tag == RefCountingKind::End)) {
       return;
-    } else if (SWIFT_UNLIKELY(tag == RefCountingKind::Witness)) {
+    } else if (SWIFT_UNLIKELY(tag == RefCountingKind::Metatype)) {
       auto typePtr = readBytes<uintptr_t>(typeLayout, offset);
       auto *type = reinterpret_cast<Metadata*>(typePtr);
+      type->vw_destroy((OpaqueValue*)addr);
+      addr += type->vw_size();
+    } else if (SWIFT_UNLIKELY(tag == RefCountingKind::Resilient)) {
+      auto *type = getResilientTypeMetadata(typeLayout, offset);
       type->vw_destroy((OpaqueValue*)addr);
       addr += type->vw_size();
     } else {
@@ -210,9 +220,14 @@ swift_generic_initWithCopy(void *dest, void *src, void *metadata) {
 
     if (SWIFT_UNLIKELY(tag == RefCountingKind::End)) {
       return;
-    } else if (SWIFT_UNLIKELY(tag == RefCountingKind::Witness)) {
+    } else if (SWIFT_UNLIKELY(tag == RefCountingKind::Metatype)) {
       auto typePtr = readBytes<uintptr_t>(typeLayout, offset);
       auto *type = reinterpret_cast<Metadata*>(typePtr);
+      type->vw_initializeWithCopy((OpaqueValue*)((uintptr_t)dest + addrOffset),
+                                  (OpaqueValue*)((uintptr_t)src + addrOffset));
+      addrOffset += type->vw_size();
+    } else if (SWIFT_UNLIKELY(tag == RefCountingKind::Resilient)) {
+      auto *type = getResilientTypeMetadata(typeLayout, offset);
       type->vw_initializeWithCopy((OpaqueValue*)((uintptr_t)dest + addrOffset),
                                   (OpaqueValue*)((uintptr_t)src + addrOffset));
       addrOffset += type->vw_size();
@@ -257,7 +272,7 @@ swift_generic_initWithTake(void *dest, void *src, void *metadata) {
       swift_unknownObjectWeakTakeInit((WeakReference*)((uintptr_t)dest + addrOffset),
                                       (WeakReference*)((uintptr_t)src + addrOffset));
       break;
-    case RefCountingKind::Witness: {
+    case RefCountingKind::Metatype: {
       auto typePtr = readBytes<uintptr_t>(typeLayout, offset);
       auto *type = reinterpret_cast<Metadata*>(typePtr);
       if (SWIFT_UNLIKELY(!type->getValueWitnesses()->isBitwiseTakable())) {
@@ -273,6 +288,15 @@ swift_generic_initWithTake(void *dest, void *src, void *metadata) {
         type->vw_initializeWithTake((OpaqueValue*)((uintptr_t)dest + addrOffset),
                                     (OpaqueValue*)((uintptr_t)src + addrOffset));
       }
+      break;
+    }
+    case RefCountingKind::Resilient: {
+      auto *type = getResilientTypeMetadata(typeLayout, offset);
+      if (SWIFT_UNLIKELY(!type->getValueWitnesses()->isBitwiseTakable())) {
+        type->vw_initializeWithTake((OpaqueValue*)((uintptr_t)dest + addrOffset),
+                                    (OpaqueValue*)((uintptr_t)src + addrOffset));
+      }
+      addrOffset += type->vw_size();
       break;
     }
     case RefCountingKind::End:
@@ -392,7 +416,7 @@ swift_generic_instantiateLayoutString(const uint8_t* layoutStr,
           continue;
         }
 
-        uint64_t op = static_cast<uint64_t>(RefCountingKind::Witness) << 56;
+        uint64_t op = static_cast<uint64_t>(RefCountingKind::Metatype) << 56;
         op |= (skipBytes & ~(0xffULL << 56));
 
         writeBytes<uint64_t>(instancedLayoutStr, instancedLayoutStrOffset, op);
@@ -415,12 +439,6 @@ swift_generic_instantiateLayoutString(const uint8_t* layoutStr,
   }
 
   type->setLayoutString(instancedLayoutStr);
-
-  fprintf(stderr, "==== Instantiated: ");
-  for (size_t i = 0; i < instancedLayoutStrSize; i++) {
-    fprintf(stderr, "\\%02x", instancedLayoutStr[i]);
-  }
-  fprintf(stderr, "\n");
 }
 
 // Allow this library to get force-loaded by autolinking
