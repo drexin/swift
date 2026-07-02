@@ -264,11 +264,10 @@ namespace irgen {
   /// Add generic parameters to the given constant struct builder.
   ///
   /// \param sig The generic signature whose parameters we wish to emit.
-  GenericArgumentMetadata addGenericParameters(
-                                          IRGenModule &IGM,
-                                          ConstantStructBuilder &B,
-                                          GenericSignature sig,
-                                          bool implicit);
+  GenericArgumentMetadata addGenericParameters(IRGenModule &IGM,
+                                               ConstantStructBuilder &B,
+                                               CanGenericSignature sig,
+                                               bool implicit);
 
   /// Add generic requirements to the given constant struct builder.
   ///
@@ -276,10 +275,9 @@ namespace irgen {
   /// signature's requirements.
   ///
   /// \param sig The generic signature whose requirements should be added.
-  GenericArgumentMetadata addGenericRequirements(
-                                          IRGenModule &IGM,
-                                          ConstantStructBuilder &B,
-                                          GenericSignature sig);
+  GenericArgumentMetadata addGenericRequirements(IRGenModule &IGM,
+                                                 ConstantStructBuilder &B,
+                                                 CanGenericSignature sig);
 
   /// Add generic requirements to the given constant struct builder.
   ///
@@ -288,12 +286,11 @@ namespace irgen {
   ///
   /// \param requirements The requirements to add.
   /// \param inverses The inverse requirements.
-  GenericArgumentMetadata addGenericRequirements(
-                                          IRGenModule &IGM,
-                                          ConstantStructBuilder &B,
-                                          GenericSignature sig,
-                                          ArrayRef<Requirement> requirements,
-                                         ArrayRef<InverseRequirement> inverses);
+  GenericArgumentMetadata
+  addGenericRequirements(IRGenModule &IGM, ConstantStructBuilder &B,
+                         CanGenericSignature sig,
+                         ArrayRef<Requirement> requirements,
+                         ArrayRef<InverseRequirement> inverses);
 
   /// Add generic pack shape descriptors to the given constant struct builder.
   ///

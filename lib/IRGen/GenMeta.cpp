@@ -589,8 +589,8 @@ namespace {
     void addGenericParameters() {
       GenericSignature sig = asImpl().getGenericSignature();
       auto metadata =
-        irgen::addGenericParameters(IGM, B, sig,
-                                    /*implicit=*/false);
+          irgen::addGenericParameters(IGM, B, sig.getCanonicalSignature(),
+                                      /*implicit=*/false);
       assert(metadata.NumParams == metadata.NumParamsEmitted &&
              "We can't use implicit GenericParamDescriptors here");
       SignatureHeader->add(metadata);
@@ -601,8 +601,8 @@ namespace {
     }
     
     void addGenericRequirements() {
-      auto metadata =
-        irgen::addGenericRequirements(IGM, B, asImpl().getGenericSignature());
+      auto metadata = irgen::addGenericRequirements(
+          IGM, B, asImpl().getGenericSignature().getCanonicalSignature());
       SignatureHeader->add(metadata);
     }
 
@@ -946,9 +946,9 @@ namespace {
       SmallVector<InverseRequirement, 2> inverses;
       Proto->getRequirementSignature().getRequirementsWithInverses(
           Proto, requirements, inverses);
-      auto metadata =
-        irgen::addGenericRequirements(IGM, B, Proto->getGenericSignature(),
-                                      requirements, inverses);
+      auto metadata = irgen::addGenericRequirements(
+          IGM, B, Proto->getGenericSignature().getCanonicalSignature(),
+          requirements, inverses);
 
       B.fillPlaceholderWithInt(*NumRequirementsInSignature, IGM.Int32Ty,
                                metadata.NumRequirements);
@@ -1543,8 +1543,8 @@ namespace {
         }
 
         auto metadata = irgen::addGenericRequirements(
-            IGM, B, genericSig, conformance->getConditionalRequirements(),
-            inverses);
+            IGM, B, genericSig.getCanonicalSignature(),
+            conformance->getConditionalRequirements(), inverses);
 
         totalNumRequirements += metadata.NumRequirements;
         B.fillPlaceholderWithInt(countPlaceholders[index++], IGM.Int16Ty,
@@ -7752,15 +7752,15 @@ static bool canUseImplicitGenericParamDescriptors(CanGenericSignature sig) {
   return allImplicit && count <= MaxNumImplicitGenericParamDescriptors;
 }
 
-GenericArgumentMetadata
-irgen::addGenericParameters(IRGenModule &IGM, ConstantStructBuilder &B,
-                            GenericSignature sig, bool implicit) {
+GenericArgumentMetadata irgen::addGenericParameters(IRGenModule &IGM,
+                                                    ConstantStructBuilder &B,
+                                                    CanGenericSignature sig,
+                                                    bool implicit) {
   assert(sig);
-  auto canSig = sig.getCanonicalSignature();
 
   GenericArgumentMetadata metadata;
 
-  canSig->forEachParam([&](GenericTypeParamType *param, bool canonical) {
+  sig->forEachParam([&](GenericTypeParamType *param, bool canonical) {
     // Currently, there are only type parameters. The parameter is a key
     // argument if it's canonical in its generic context.
     auto descriptor = getGenericParamDescriptor(param, canonical);
@@ -7776,7 +7776,7 @@ irgen::addGenericParameters(IRGenModule &IGM, ConstantStructBuilder &B,
     // Only key arguments count toward NumGenericPackArguments.
     if (descriptor.hasKeyArgument() &&
         descriptor.getKind() == GenericParamKind::TypePack) {
-      auto reducedShape = canSig->getReducedShape(param)->getCanonicalType();
+      auto reducedShape = sig->getReducedShape(param)->getCanonicalType();
       metadata.GenericPackArguments.emplace_back(
           GenericPackKind::Metadata,
           metadata.NumGenericKeyArguments,
@@ -7804,12 +7804,10 @@ irgen::addGenericParameters(IRGenModule &IGM, ConstantStructBuilder &B,
 // Generic requirements.
 //===----------------------------------------------------------------------===//
 
-static void addRelativeAddressOfTypeRef(IRGenModule &IGM,
-                                        ConstantStructBuilder &B,
-                                        Type type,
-                                        GenericSignature sig,
-                                        MangledTypeRefRole role =
-                                          MangledTypeRefRole::Metadata) {
+static void addRelativeAddressOfTypeRef(
+    IRGenModule &IGM, ConstantStructBuilder &B, CanType type,
+    CanGenericSignature sig,
+    MangledTypeRefRole role = MangledTypeRefRole::Metadata) {
   auto typeName = IGM.getTypeRef(type, sig, role).first;
   B.addRelativeAddress(typeName);
 }
@@ -7817,10 +7815,10 @@ static void addRelativeAddressOfTypeRef(IRGenModule &IGM,
 /// Add a generic requirement to the given constant struct builder.
 static void addGenericRequirement(IRGenModule &IGM, ConstantStructBuilder &B,
                                   GenericArgumentMetadata &metadata,
-                                  GenericSignature sig,
+                                  CanGenericSignature sig,
                                   GenericRequirementFlags flags,
-                                  Type paramType,
-                                  llvm::function_ref<void ()> addReference) {
+                                  CanType paramType,
+                                  llvm::function_ref<void()> addReference) {
   // Only key arguments (ie, conformance requirements) count toward
   // NumGenericPackArguments.
   if (flags.hasKeyArgument() && flags.isPackRequirement()) {
@@ -7839,9 +7837,9 @@ static void addGenericRequirement(IRGenModule &IGM, ConstantStructBuilder &B,
   addReference();
 }
 
-GenericArgumentMetadata irgen::addGenericRequirements(
-                                   IRGenModule &IGM, ConstantStructBuilder &B,
-                                   GenericSignature sig) {
+GenericArgumentMetadata irgen::addGenericRequirements(IRGenModule &IGM,
+                                                      ConstantStructBuilder &B,
+                                                      CanGenericSignature sig) {
   SmallVector<Requirement, 2> reqs;
   SmallVector<InverseRequirement, 2> inverses;
   sig->getRequirementsWithInverses(reqs, inverses);
@@ -7849,10 +7847,8 @@ GenericArgumentMetadata irgen::addGenericRequirements(
 }
 
 GenericArgumentMetadata irgen::addGenericRequirements(
-                                   IRGenModule &IGM, ConstantStructBuilder &B,
-                                   GenericSignature sig,
-                                   ArrayRef<Requirement> requirements,
-                                   ArrayRef<InverseRequirement> inverses) {
+    IRGenModule &IGM, ConstantStructBuilder &B, CanGenericSignature sig,
+    ArrayRef<Requirement> requirements, ArrayRef<InverseRequirement> inverses) {
   assert(sig);
 
   GenericArgumentMetadata metadata;
@@ -7891,9 +7887,10 @@ GenericArgumentMetadata irgen::addGenericRequirements(
                                              /*key argument*/ false,
                                              isPackRequirement,
                                              isValueRequirement);
-        addGenericRequirement(IGM, B, metadata, sig, flags,
-                              requirement.getFirstType(),
-         [&]{ B.addInt32((uint32_t)GenericRequirementLayoutKind::Class); });
+        addGenericRequirement(
+            IGM, B, metadata, sig, flags,
+            requirement.getFirstType()->getCanonicalType(),
+            [&] { B.addInt32((uint32_t)GenericRequirementLayoutKind::Class); });
         break;
       }
       default:
@@ -7919,11 +7916,11 @@ GenericArgumentMetadata irgen::addGenericRequirements(
             /* is parameter pack */ false,
             /* isValue */ false);
         addGenericRequirement(IGM, B, metadata, sig, flags,
-                              requirement.getFirstType(),
-         [&]{
-          B.addInt16(0xFFFF);
-          B.addInt16(mask.rawBits());
-        });
+                              requirement.getFirstType()->getCanonicalType(),
+                              [&] {
+                                B.addInt16(0xFFFF);
+                                B.addInt16(mask.rawBits());
+                              });
         break;
       }
 
@@ -7941,17 +7938,16 @@ GenericArgumentMetadata irgen::addGenericRequirements(
                                            isValueRequirement);
       auto descriptorRef =
         IGM.getConstantReferenceForProtocolDescriptor(protocol);
-      addGenericRequirement(IGM, B, metadata, sig, flags,
-                            requirement.getFirstType(),
-        [&]{
-          unsigned tag = unsigned(descriptorRef.isIndirect());
-          if (protocol->isObjC())
-            tag |= 0x02;
-          
-          B.addTaggedRelativeOffset(IGM.RelativeAddressTy,
-                                    descriptorRef.getValue(),
-                                    tag);
-        });
+      addGenericRequirement(
+          IGM, B, metadata, sig, flags,
+          requirement.getFirstType()->getCanonicalType(), [&] {
+            unsigned tag = unsigned(descriptorRef.isIndirect());
+            if (protocol->isObjC())
+              tag |= 0x02;
+
+            B.addTaggedRelativeOffset(IGM.RelativeAddressTy,
+                                      descriptorRef.getValue(), tag);
+          });
       break;
     }
 
@@ -7977,14 +7973,13 @@ GenericArgumentMetadata irgen::addGenericRequirements(
       // requirement. We want the original RHS, just mangled with the signature
       // available for the dangling-accessor fallback.
       auto typeName =
-          IGM.getTypeRef(requirement.getSecondType()->getCanonicalType(),
-                         sig.getCanonicalSignature(),
+          IGM.getTypeRef(requirement.getSecondType()->getCanonicalType(), sig,
                          MangledTypeRefRole::Metadata)
               .first;
 
       addGenericRequirement(IGM, B, metadata, sig, flags,
-                            requirement.getFirstType(),
-        [&]{ B.addRelativeAddress(typeName); });
+                            requirement.getFirstType()->getCanonicalType(),
+                            [&] { B.addRelativeAddress(typeName); });
 
       // ABI TODO: Same type and superclass constraints also imply
       // "same conformance" constraints on any protocol requirements of
@@ -8026,12 +8021,11 @@ GenericArgumentMetadata irgen::addGenericRequirements(
         /*key argument*/ false,
         genericParam->isParameterPack(),
         genericParam->isValue());
-    addGenericRequirement(IGM, B, metadata, sig, flags,
-                          Type(genericParam),
-     [&]{ 
-      B.addInt16(index);
-      B.addInt16(suppressed[index].rawBits());
-    });
+    addGenericRequirement(IGM, B, metadata, sig, flags, CanType(genericParam),
+                          [&] {
+                            B.addInt16(index);
+                            B.addInt16(suppressed[index].rawBits());
+                          });
 
     ++metadata.NumRequirements;
   }

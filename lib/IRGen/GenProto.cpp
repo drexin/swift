@@ -2354,7 +2354,7 @@ namespace {
 
       auto sig = normal->getGenericSignature();
       auto metadata = irgen::addGenericRequirements(
-          IGM, B, sig, condReqs, inverses);
+          IGM, B, sig.getCanonicalSignature(), condReqs, inverses);
 
       Flags = Flags.withNumConditionalRequirements(metadata.NumRequirements);
       Flags = Flags.withNumConditionalPackDescriptors(
