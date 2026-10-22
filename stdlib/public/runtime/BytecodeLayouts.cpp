@@ -346,20 +346,41 @@ static constexpr bool platformSupportsTaggedPointers() {
 #define CONTINUE_PRECOPIED(METADATA, READER, ADDR_OFFSET, DEST, SRC)           \
   CONTINUE_NO_COPY(METADATA, READER, ADDR_OFFSET, DEST)
 
-// Walks a layout string with computed-goto dispatch. With INLINE_ENUMS, the
-// active payload of a multi-payload enum is walked by the same loop instead of
-// a call to multiPayloadEnum*: the loop saves where the enum ends, continues
-// with the payload's ref counts and resumes after the enum at the payload's
-// End. Only one enum is walked inline at a time; enums inside its payload take
-// the call. Only for witnesses whose multi-payload handlers walk the active
-// payload with the same table (destroy, initWithCopy, initWithTake).
+// Where a nested walk (see handleRefCountsImpl) resumes after each
+// multi-payload enum whose payload it is in, innermost last. A fixed-size array
+// on the nested walk's stack; enums nested more deeply take the call.
+struct LayoutStringResumeStack {
+  static constexpr unsigned capacity = 8;
+
+  unsigned depth;
+  LayoutStringReader1 readers[capacity];
+  uintptr_t addrOffsets[capacity];
+};
+
+// Walks a layout string with computed-goto dispatch. MODE says how the walk
+// handles multi-payload enums:
+//
+// 0: It calls multiPayloadEnum* through FN_TABLE.
+// 1: It walks the active payload of an enum with the same loop instead: it
+//    saves where the enum ends, continues with the payload's ref counts and
+//    resumes after the enum at the payload's End. It keeps the resume point in
+//    two locals, so that walks of values without enums, or with one level of
+//    them, are as cheap as possible. When it meets an enum inside the payload,
+//    it hands the rest of the value off to NESTED_FN, a walk in mode 2,
+//    and is done.
+// 2: Like 1, but it keeps the resume points in a LayoutStringResumeStack, so
+//    that it walks enums nested in payloads inline as well. It starts in the
+//    payload that a mode 1 walk handed off from, with the resume point
+//    `_nestedResumeReader` and `_nestedResumeAddrOffset`.
+//
+// Modes 1 and 2 only for witnesses whose multi-payload handlers walk the
+// active payload with the same table (destroy, initWithCopy, initWithTake).
 // COPY_BYTES says whether the bytes of inline enums still need to be copied;
 // false with CONTINUE_PRECOPIED.
-#define handleRefCountsImpl(FN_TABLE, CONTINUE, INLINE_ENUMS, COPY_BYTES,      \
+#define handleRefCountsImpl(FN_TABLE, CONTINUE, MODE, COPY_BYTES, NESTED_FN,   \
                             METADATA, READER, ADDR_OFFSET, ...)                \
   do {                                                                         \
-    LayoutStringReader1 _resumeReader{nullptr};                                \
-    uintptr_t _resumeAddrOffset = 0;                                           \
+    LS_RESUME_STATE_##MODE;                                                    \
     while (true) {                                                             \
       uint64_t TAG = 0;                                                        \
       uintptr_t OFFSET = 0;                                                    \
@@ -396,28 +417,20 @@ static constexpr bool platformSupportsTaggedPointers() {
         CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                  \
       }                                                                        \
                                                                                \
-      [[clang::nomerge]] {                                                     \
+      LS_NOMERGE_##MODE {                                                      \
       End:                                                                     \
-        if (INLINE_ENUMS && _resumeReader.layoutStr) {                         \
-          if (COPY_BYTES && _resumeAddrOffset != ADDR_OFFSET) {                \
-            copyPayloadBytes(ADDR_OFFSET, _resumeAddrOffset - ADDR_OFFSET,     \
-                             __VA_ARGS__);                                     \
-          }                                                                    \
-          ADDR_OFFSET = _resumeAddrOffset;                                     \
-          READER = _resumeReader;                                              \
-          _resumeReader.layoutStr = nullptr;                                   \
-          CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                \
-        }                                                                      \
+        LS_RESUME_AT_END_##MODE(CONTINUE, COPY_BYTES, METADATA, READER,        \
+                                ADDR_OFFSET, __VA_ARGS__);                     \
         goto done;                                                             \
       }                                                                        \
-      INLINE_MULTI_PAYLOAD_ENUM(MultiPayloadEnumFN, CONTINUE, INLINE_ENUMS,    \
-                                COPY_BYTES, METADATA, READER, ADDR_OFFSET,     \
-                                __VA_ARGS__)                                   \
-      INLINE_MULTI_PAYLOAD_ENUM(MultiPayloadEnumFNResolved, CONTINUE,          \
-                                INLINE_ENUMS, COPY_BYTES, METADATA, READER,    \
+      INLINE_MULTI_PAYLOAD_ENUM(MultiPayloadEnumFN, CONTINUE, MODE,            \
+                                COPY_BYTES, NESTED_FN, METADATA, READER,       \
                                 ADDR_OFFSET, __VA_ARGS__)                      \
-      INLINE_MULTI_PAYLOAD_ENUM(MultiPayloadEnumGeneric, CONTINUE,             \
-                                INLINE_ENUMS, COPY_BYTES, METADATA, READER,    \
+      INLINE_MULTI_PAYLOAD_ENUM(MultiPayloadEnumFNResolved, CONTINUE, MODE,    \
+                                COPY_BYTES, NESTED_FN, METADATA, READER,       \
+                                ADDR_OFFSET, __VA_ARGS__)                      \
+      INLINE_MULTI_PAYLOAD_ENUM(MultiPayloadEnumGeneric, CONTINUE, MODE,       \
+                                COPY_BYTES, NESTED_FN, METADATA, READER,       \
                                 ADDR_OFFSET, __VA_ARGS__)                      \
       [[clang::nomerge]] {                                                     \
       Error:                                                                   \
@@ -503,44 +516,157 @@ static constexpr bool platformSupportsTaggedPointers() {
         ADDR_OFFSET = _ADDR_OFFSET;                                            \
         CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                  \
       }                                                                        \
+      LS_HAND_OFF_##MODE(NESTED_FN, METADATA, READER, ADDR_OFFSET,             \
+                         __VA_ARGS__)                                          \
       _Pragma("clang diagnostic pop")                                          \
     }                                                                          \
   done:                                                                        \
     break;                                                                     \
   } while (false)
 
-// The label for a multi-payload enum kind in handleRefCountsImpl. If the enum
-// can't be walked inline, it takes the call through the table.
-#define INLINE_MULTI_PAYLOAD_ENUM(KIND, CONTINUE, INLINE_ENUMS, COPY_BYTES,    \
+// The label for a multi-payload enum kind in handleRefCountsImpl. If the walk
+// doesn't walk the enum inline, it takes the call through the table.
+#define INLINE_MULTI_PAYLOAD_ENUM(KIND, CONTINUE, MODE, COPY_BYTES, NESTED_FN, \
                                   METADATA, READER, ADDR_OFFSET, ...)          \
-  [[clang::nomerge]] {                                                         \
+  LS_NOMERGE_##MODE {                                                          \
   KIND:                                                                        \
-    if (INLINE_ENUMS && !_resumeReader.layoutStr) {                            \
-      uintptr_t enumStart = ADDR_OFFSET;                                       \
-      size_t enumSize;                                                         \
-      LayoutStringReader1 payloadReader;                                       \
-      if (readMultiPayloadEnum<RefCountingKind::KIND>(                         \
-              READER, payloadSourceAddr(__VA_ARGS__) + enumStart, enumSize,    \
-              payloadReader)) {                                                \
-        _resumeReader = READER;                                                \
-        _resumeAddrOffset = enumStart + enumSize;                              \
-        READER = payloadReader;                                                \
-      } else {                                                                 \
-        if (COPY_BYTES)                                                        \
-          copyPayloadBytes(enumStart, enumSize, __VA_ARGS__);                  \
-        ADDR_OFFSET = enumStart + enumSize;                                    \
-      }                                                                        \
-      CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                    \
-    }                                                                          \
+    LS_ENTER_ENUM_##MODE(KIND, CONTINUE, COPY_BYTES, NESTED_FN, METADATA,      \
+                         READER, ADDR_OFFSET, __VA_ARGS__);                    \
     goto Default;                                                              \
   }
 
+// Reads the enum at the walk's position. If its active payload has ref counts,
+// runs ENTER, with `payloadReader` at them and `enumEnd` where the walk resumes
+// after the enum; otherwise skips the enum (copying its bytes if needed).
+#define LS_READ_ENUM(KIND, CONTINUE, COPY_BYTES, METADATA, READER,             \
+                     ADDR_OFFSET, ENTER, ...)                                  \
+  {                                                                            \
+    uintptr_t enumStart = ADDR_OFFSET;                                         \
+    size_t enumSize;                                                           \
+    LayoutStringReader1 payloadReader;                                         \
+    if (readMultiPayloadEnum<RefCountingKind::KIND>(                           \
+            READER, payloadSourceAddr(__VA_ARGS__) + enumStart, enumSize,      \
+            payloadReader)) {                                                  \
+      uintptr_t enumEnd = enumStart + enumSize;                                \
+      ENTER                                                                    \
+      READER = payloadReader;                                                  \
+    } else {                                                                   \
+      if (COPY_BYTES)                                                          \
+        copyPayloadBytes(enumStart, enumSize, __VA_ARGS__);                    \
+      ADDR_OFFSET = enumStart + enumSize;                                      \
+    }                                                                          \
+    CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                      \
+  }
+
+// Mode 0: no state; enums take the call. Its End and enum blocks contain no
+// calls, so nomerge would be ignored on them.
+#define LS_NOMERGE_0
+#define LS_HAND_OFF_0(NESTED_FN, METADATA, READER, ADDR_OFFSET, ...)
+#define LS_RESUME_STATE_0
+#define LS_RESUME_AT_END_0(CONTINUE, COPY_BYTES, METADATA, READER,             \
+                           ADDR_OFFSET, ...)
+#define LS_ENTER_ENUM_0(KIND, CONTINUE, COPY_BYTES, NESTED_FN, METADATA,       \
+                        READER, ADDR_OFFSET, ...)
+
+// Mode 1: one resume point in two locals; nested enums hand off to NESTED_FN.
+#define LS_NOMERGE_1 [[clang::nomerge]]
+// The enum labels share this block, after the walk's other blocks, so that
+// the code they run for every enum stays short.
+#define LS_HAND_OFF_1(NESTED_FN, METADATA, READER, ADDR_OFFSET, ...)           \
+  [[clang::nomerge]] {                                                         \
+  HandOffNested:                                                               \
+    /* Rewind to the enum's tag and hand the rest of the value off. */         \
+    READER.layoutStr -= sizeof(uint64_t);                                      \
+    ADDR_OFFSET = NESTED_FN(METADATA, READER, ADDR_OFFSET - OFFSET,            \
+                            _resumeReader, _resumeAddrOffset, __VA_ARGS__);    \
+    goto done;                                                                 \
+  }
+#define LS_RESUME_STATE_1                                                      \
+  LayoutStringReader1 _resumeReader{nullptr};                                  \
+  uintptr_t _resumeAddrOffset = 0;
+#define LS_RESUME_AT_END_1(CONTINUE, COPY_BYTES, METADATA, READER,             \
+                           ADDR_OFFSET, ...)                                   \
+  if (_resumeReader.layoutStr) {                                               \
+    if (COPY_BYTES && _resumeAddrOffset != ADDR_OFFSET) {                      \
+      copyPayloadBytes(ADDR_OFFSET, _resumeAddrOffset - ADDR_OFFSET,           \
+                       __VA_ARGS__);                                           \
+    }                                                                          \
+    ADDR_OFFSET = _resumeAddrOffset;                                           \
+    READER = _resumeReader;                                                    \
+    _resumeReader.layoutStr = nullptr;                                         \
+    CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                      \
+  }
+#define LS_ENTER_ENUM_1(KIND, CONTINUE, COPY_BYTES, NESTED_FN, METADATA,       \
+                        READER, ADDR_OFFSET, ...)                              \
+  if (!_resumeReader.layoutStr) {                                              \
+    LS_READ_ENUM(                                                              \
+        KIND, CONTINUE, COPY_BYTES, METADATA, READER, ADDR_OFFSET,             \
+        {                                                                      \
+          _resumeReader = READER;                                              \
+          _resumeAddrOffset = enumEnd;                                         \
+        },                                                                     \
+        __VA_ARGS__)                                                           \
+  }                                                                            \
+  goto HandOffNested;
+
+// Mode 2: the resume points in a LayoutStringResumeStack, starting with the
+// one handed off from mode 1.
+#define LS_NOMERGE_2 [[clang::nomerge]]
+#define LS_HAND_OFF_2(NESTED_FN, METADATA, READER, ADDR_OFFSET, ...)
+#define LS_RESUME_STATE_2                                                      \
+  LayoutStringResumeStack _resumeStack;                                        \
+  _resumeStack.depth = 1;                                                      \
+  _resumeStack.readers[0] = _nestedResumeReader;                               \
+  _resumeStack.addrOffsets[0] = _nestedResumeAddrOffset;
+#define LS_RESUME_AT_END_2(CONTINUE, COPY_BYTES, METADATA, READER,             \
+                           ADDR_OFFSET, ...)                                   \
+  if (_resumeStack.depth) {                                                    \
+    --_resumeStack.depth;                                                      \
+    uintptr_t _resumeAt = _resumeStack.addrOffsets[_resumeStack.depth];        \
+    if (COPY_BYTES && _resumeAt != ADDR_OFFSET) {                              \
+      copyPayloadBytes(ADDR_OFFSET, _resumeAt - ADDR_OFFSET, __VA_ARGS__);     \
+    }                                                                          \
+    ADDR_OFFSET = _resumeAt;                                                   \
+    READER = _resumeStack.readers[_resumeStack.depth];                         \
+    CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                      \
+  }
+#define LS_ENTER_ENUM_2(KIND, CONTINUE, COPY_BYTES, NESTED_FN, METADATA,       \
+                        READER, ADDR_OFFSET, ...)                              \
+  if (_resumeStack.depth < LayoutStringResumeStack::capacity) {                \
+    LS_READ_ENUM(                                                              \
+        KIND, CONTINUE, COPY_BYTES, METADATA, READER, ADDR_OFFSET,             \
+        {                                                                      \
+          _resumeStack.readers[_resumeStack.depth] = READER;                   \
+          _resumeStack.addrOffsets[_resumeStack.depth] = enumEnd;              \
+          ++_resumeStack.depth;                                                \
+        },                                                                     \
+        __VA_ARGS__)                                                           \
+  }
+
 #define handleRefCounts(FN_TABLE, CONTINUE, ...)                               \
-  handleRefCountsImpl(FN_TABLE, CONTINUE, false, false, __VA_ARGS__)
-#define handleRefCountsInliningEnums(FN_TABLE, CONTINUE, ...)                  \
-  handleRefCountsImpl(FN_TABLE, CONTINUE, true, true, __VA_ARGS__)
-#define handleRefCountsPrecopied(FN_TABLE, ...)                                \
-  handleRefCountsImpl(FN_TABLE, CONTINUE_PRECOPIED, true, false, __VA_ARGS__)
+  handleRefCountsImpl(FN_TABLE, CONTINUE, 0, false, _, __VA_ARGS__)
+#define handleRefCountsInliningEnums(FN_TABLE, CONTINUE, NESTED_FN, ...)       \
+  handleRefCountsImpl(FN_TABLE, CONTINUE, 1, true, NESTED_FN, __VA_ARGS__)
+#define handleRefCountsPrecopied(FN_TABLE, NESTED_FN, ...)                     \
+  handleRefCountsImpl(FN_TABLE, CONTINUE_PRECOPIED, 1, false, NESTED_FN,       \
+                      __VA_ARGS__)
+
+// Defines NAME, the mode 2 walk that a mode 1 walk with these arguments hands
+// off to. It returns the offset where it ended, the end of the value. (It takes
+// the walk's state by value, so that the mode 1 walk can keep it in
+// registers.) ADDR_PARAMS and ADDR_ARGS are the walk's address arguments:
+// (addr) for destroy, (dest, src) for the copying witnesses.
+#define DEFINE_NESTED_WALK(NAME, FN_TABLE, CONTINUE, COPY_BYTES, ADDR_PARAMS,  \
+                           ADDR_ARGS)                                          \
+  SWIFT_NOINLINE static uintptr_t NAME(                                        \
+      const Metadata *metadata, LayoutStringReader1 reader,                    \
+      uintptr_t addrOffset, LayoutStringReader1 _nestedResumeReader,           \
+      uintptr_t _nestedResumeAddrOffset, LS_UNPAREN ADDR_PARAMS) {             \
+    handleRefCountsImpl(FN_TABLE, CONTINUE, 2, COPY_BYTES, _, metadata,        \
+                        reader, addrOffset, LS_UNPAREN ADDR_ARGS);             \
+    return addrOffset;                                                         \
+  }
+#define LS_UNPAREN(...) __VA_ARGS__
 #endif
 
 typedef void (*DestrFn)(const Metadata *metadata, LayoutStringReader1 &reader,
@@ -1309,6 +1435,9 @@ constexpr DestrFn destroyTable[] = {
 
 #if defined(__APPLE__) && defined(__arm64__)
 static const DestrFn *getDestroyTable() { return destroyTable; }
+
+DEFINE_NESTED_WALK(destroyNested, destroyTable, CONTINUE_NO_COPY, true,
+                   (uint8_t *addr), (addr))
 #endif
 
 static void handleRefCountsDestroy(const Metadata *metadata,
@@ -1333,8 +1462,8 @@ SWIFT_NOINLINE static void destroyRefCounts(const Metadata *metadata,
                                             LayoutStringReader1 reader,
                                             uintptr_t addrOffset,
                                             uint8_t *addr) {
-  handleRefCountsInliningEnums(destroyTable, CONTINUE_NO_COPY, metadata, reader,
-                               addrOffset, addr);
+  handleRefCountsInliningEnums(destroyTable, CONTINUE_NO_COPY, destroyNested,
+                               metadata, reader, addrOffset, addr);
 }
 
 // Continues a walk that destroyFast handed off at `reader`. If the walk was in
@@ -1474,8 +1603,8 @@ static void swift_cvw_destroyImpl(swift::OpaqueValue *address,
   uint8_t *addr = (uint8_t *)address;
 
 #if defined(__APPLE__) && defined(__arm64__)
-  handleRefCountsInliningEnums(destroyTable, CONTINUE_NO_COPY, metadata, reader,
-                               addrOffset, addr);
+  handleRefCountsInliningEnums(destroyTable, CONTINUE_NO_COPY, destroyNested,
+                               metadata, reader, addrOffset, addr);
 #else
   handleRefCountsDestroy(metadata, reader, addrOffset, addr);
 #endif
@@ -1495,8 +1624,8 @@ void swift::swift_cvw_arrayDestroy(swift::OpaqueValue *address, size_t count,
   for (uint8_t *end = addr + count * stride; addr != end; addr += stride) {
     LayoutStringReader1 reader{body};
     uintptr_t addrOffset = 0;
-    handleRefCountsInliningEnums(destroyTable, CONTINUE_NO_COPY, metadata,
-                                 reader, addrOffset, addr);
+    handleRefCountsInliningEnums(destroyTable, CONTINUE_NO_COPY, destroyNested,
+                                 metadata, reader, addrOffset, addr);
   }
 #else
   for (size_t i = 0; i < count; i++) {
@@ -1704,6 +1833,12 @@ constexpr InitFn initWithCopyTable[] = {
 
 #if defined(__APPLE__) && defined(__arm64__)
 static const InitFn *getInitWithCopyTable() { return initWithCopyTable; }
+
+DEFINE_NESTED_WALK(initWithCopyNested, initWithCopyTable, CONTINUE_WITH_COPY,
+                   true, (uint8_t *dest, uint8_t *src), (dest, src))
+DEFINE_NESTED_WALK(initWithCopyPrecopiedNested, initWithCopyTable,
+                   CONTINUE_PRECOPIED, false, (uint8_t *dest, uint8_t *src),
+                   (dest, src))
 #endif
 
 static void handleRefCountsInitWithCopy(const Metadata *metadata,
@@ -1749,7 +1884,8 @@ arrayInitWithCopyPiecewise(const Metadata *metadata, uint8_t *dest,
     LayoutStringReader1 reader{body};
     uintptr_t addrOffset = 0;
     handleRefCountsInliningEnums(initWithCopyTable, CONTINUE_WITH_COPY,
-                                 metadata, reader, addrOffset, dest, src);
+                                 initWithCopyNested, metadata, reader,
+                                 addrOffset, dest, src);
   }
 }
 #endif
@@ -1767,8 +1903,8 @@ swift_cvw_initWithCopyImpl(swift::OpaqueValue *_dest, swift::OpaqueValue *_src,
   // Copy all bytes at once; the walk then only handles the ref-counted fields,
   // whose handlers initialize their own bytes of dest again.
   layoutStringMemcpy(dest, src, metadata->vw_size());
-  handleRefCountsPrecopied(initWithCopyTable, metadata, reader, addrOffset,
-                           dest, src);
+  handleRefCountsPrecopied(initWithCopyTable, initWithCopyPrecopiedNested,
+                           metadata, reader, addrOffset, dest, src);
 #else
   handleRefCountsInitWithCopy(metadata, reader, addrOffset, dest, src);
 #endif
@@ -1796,8 +1932,8 @@ void swift::swift_cvw_arrayInitWithCopy(swift::OpaqueValue *_dest,
     LayoutStringReader1 reader{body};
     uintptr_t addrOffset = 0;
     layoutStringMemcpy(dest, src, size);
-    handleRefCountsPrecopied(initWithCopyTable, metadata, reader, addrOffset,
-                             dest, src);
+    handleRefCountsPrecopied(initWithCopyTable, initWithCopyPrecopiedNested,
+                             metadata, reader, addrOffset, dest, src);
   }
 #else
   for (size_t i = 0; i < count; i++) {
@@ -1900,6 +2036,9 @@ constexpr InitFn initWithTakeTable[] = {
 
 #if defined(__APPLE__) && defined(__arm64__)
 static const InitFn *getInitWithTakeTable() { return initWithTakeTable; }
+
+DEFINE_NESTED_WALK(initWithTakeNested, initWithTakeTable, CONTINUE_WITH_COPY,
+                   true, (uint8_t *dest, uint8_t *src), (dest, src))
 #endif
 
 static void handleRefCountsInitWithTake(const Metadata *metadata,
@@ -1941,8 +2080,9 @@ swift_cvw_initWithTakeImpl(swift::OpaqueValue *_dest, swift::OpaqueValue *_src,
   uintptr_t addrOffset = 0;
 
 #if defined(__APPLE__) && defined(__arm64__)
-  handleRefCountsInliningEnums(initWithTakeTable, CONTINUE_WITH_COPY, metadata,
-                               reader, addrOffset, dest, src);
+  handleRefCountsInliningEnums(initWithTakeTable, CONTINUE_WITH_COPY,
+                               initWithTakeNested, metadata, reader, addrOffset,
+                               dest, src);
 #else
   handleRefCountsInitWithTake(metadata, reader, addrOffset, dest, src);
 #endif
