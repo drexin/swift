@@ -373,6 +373,10 @@ struct LayoutStringResumeStack {
 //    payload that a mode 1 walk handed off from, with the resume point
 //    `_nestedResumeReader` and `_nestedResumeAddrOffset`.
 //
+// 3: For assignWithCopy: like 1, but an enum is walked inline only if dest and
+//    src are in the same case, and an enum inside the payload takes the call.
+//    Any other enum is assigned by assignMultiPayloadEnumChangingCase.
+//
 // Modes 1 and 2 only for witnesses whose multi-payload handlers walk the
 // active payload with the same table (destroy, initWithCopy, initWithTake).
 // COPY_BYTES says whether the bytes of inline enums still need to be copied;
@@ -643,8 +647,34 @@ struct LayoutStringResumeStack {
         __VA_ARGS__)                                                           \
   }
 
+// Mode 3: as mode 1, with readMultiPayloadEnumForAssign.
+#define LS_NOMERGE_3 [[clang::nomerge]]
+#define LS_HAND_OFF_3(NESTED_FN, METADATA, READER, ADDR_OFFSET, ...)
+#define LS_RESUME_STATE_3 LS_RESUME_STATE_1
+#define LS_RESUME_AT_END_3 LS_RESUME_AT_END_1
+#define LS_ENTER_ENUM_3(KIND, CONTINUE, COPY_BYTES, NESTED_FN, METADATA,       \
+                        READER, ADDR_OFFSET, ...)                              \
+  if (!_resumeReader.layoutStr) {                                              \
+    uintptr_t enumStart = ADDR_OFFSET;                                         \
+    size_t enumSize;                                                           \
+    LayoutStringReader1 payloadReader;                                         \
+    if (readMultiPayloadEnumForAssign<RefCountingKind::KIND>(                  \
+            METADATA, READER, enumStart, enumSize, payloadReader,              \
+            __VA_ARGS__)) {                                                    \
+      _resumeReader = READER;                                                  \
+      _resumeAddrOffset = enumStart + enumSize;                                \
+      READER = payloadReader;                                                  \
+    } else {                                                                   \
+      ADDR_OFFSET = enumStart + enumSize;                                      \
+    }                                                                          \
+    CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                      \
+  }
+
 #define handleRefCounts(FN_TABLE, CONTINUE, ...)                               \
   handleRefCountsImpl(FN_TABLE, CONTINUE, 0, false, _, __VA_ARGS__)
+#define handleRefCountsAssigningInline(...)                                    \
+  handleRefCountsImpl(assignWithCopyTable, CONTINUE_WITH_COPY, 3, true, _,     \
+                      __VA_ARGS__)
 #define handleRefCountsInliningEnums(FN_TABLE, CONTINUE, NESTED_FN, ...)       \
   handleRefCountsImpl(FN_TABLE, CONTINUE, 1, true, NESTED_FN, __VA_ARGS__)
 #define handleRefCountsPrecopied(FN_TABLE, NESTED_FN, ...)                     \
@@ -2822,6 +2852,88 @@ static void multiPayloadEnumFNAssignWithCopy(const Metadata *metadata,
   addrOffset += enumSize;
 }
 
+#if defined(__APPLE__) && defined(__arm64__)
+// assignWithCopy of a multi-payload enum at `enumStart`, unless dest and src
+// are in the same case and its payload has ref counts. `payloadOffsets` is at
+// the enum's table of payload ref count offsets. Payloads are small, so this
+// uses the table-driven walks, which save fewer registers than the inlined
+// ones.
+SWIFT_NOINLINE static void assignMultiPayloadEnumChangingCase(
+    const Metadata *metadata, LayoutStringReader1 payloadOffsets,
+    size_t numPayloads, uint64_t srcTag, uint64_t destTag, uintptr_t enumStart,
+    size_t enumSize, uint8_t *dest, uint8_t *src) {
+  auto payloadRefCounts = [&](uint64_t tag) {
+    LayoutStringReader1 reader = payloadOffsets;
+    reader.skip(numPayloads * sizeof(size_t) +
+                payloadOffsets.peekBytes<size_t>(tag * sizeof(size_t)));
+    return reader;
+  };
+  if (destTag < numPayloads) {
+    LayoutStringReader1 reader = payloadRefCounts(destTag);
+    uintptr_t addrOffset = enumStart;
+    handleRefCountsDestroy(metadata, reader, addrOffset, dest);
+  }
+  uintptr_t addrOffset = enumStart;
+  if (srcTag < numPayloads) {
+    LayoutStringReader1 reader = payloadRefCounts(srcTag);
+    handleRefCountsInitWithCopy(metadata, reader, addrOffset, dest, src);
+  }
+  uintptr_t enumEnd = enumStart + enumSize;
+  if (addrOffset != enumEnd)
+    layoutStringMemcpy(dest + addrOffset, src + addrOffset,
+                       enumEnd - addrOffset);
+}
+
+// For mode 3 of handleRefCountsImpl: reads the header of the multi-payload
+// enum at `enumStart` in dest and src and advances `reader` past the enum.
+// Returns true, with `payloadReader` at the payload's ref counts, if dest and
+// src are in the same case and its payload has ref counts. Otherwise it
+// assigns the enum.
+template <RefCountingKind Kind>
+SWIFT_ALWAYS_INLINE static inline bool readMultiPayloadEnumForAssign(
+    const Metadata *metadata, LayoutStringReader1 &reader, uintptr_t enumStart,
+    size_t &enumSize, LayoutStringReader1 &payloadReader, uint8_t *dest,
+    uint8_t *src) {
+  size_t numPayloads;
+  size_t refCountBytes;
+  uint64_t srcTag;
+  uint64_t destTag;
+  if constexpr (Kind == RefCountingKind::MultiPayloadEnumGeneric) {
+    size_t tagBytes;
+    reader.readBytes(tagBytes, numPayloads, refCountBytes, enumSize);
+    srcTag = readTagBytes(src + enumStart + enumSize - tagBytes, tagBytes);
+    destTag = readTagBytes(dest + enumStart + enumSize - tagBytes, tagBytes);
+  } else {
+    GetEnumTagFn getEnumTag;
+    if constexpr (Kind == RefCountingKind::MultiPayloadEnumFN) {
+      getEnumTag = readRelativeFunctionPointer<GetEnumTagFn>(reader);
+    } else {
+      static_assert(Kind == RefCountingKind::MultiPayloadEnumFNResolved);
+      getEnumTag = reader.readBytes<GetEnumTagFn>();
+    }
+    srcTag = getEnumTag(src + enumStart);
+    destTag = getEnumTag(dest + enumStart);
+    reader.readBytes(numPayloads, refCountBytes, enumSize);
+  }
+
+  LayoutStringReader1 payloadOffsets = reader;
+  reader.skip(refCountBytes + (numPayloads * sizeof(size_t)));
+  if (SWIFT_LIKELY(srcTag == destTag && srcTag < numPayloads)) {
+    size_t refCountOffset =
+        payloadOffsets.peekBytes<size_t>(srcTag * sizeof(size_t));
+    payloadReader = payloadOffsets;
+    payloadReader.skip((numPayloads * sizeof(size_t)) + refCountOffset);
+    if ((payloadReader.peekBytes<uint64_t>() >> 56) !=
+        (uint64_t)RefCountingKind::End)
+      return true;
+  }
+  assignMultiPayloadEnumChangingCase(metadata, payloadOffsets, numPayloads,
+                                     srcTag, destTag, enumStart, enumSize,
+                                     dest, src);
+  return false;
+}
+#endif
+
 static swift::OpaqueValue *
 swift_cvw_assignWithCopyImpl(swift::OpaqueValue *_dest,
                              swift::OpaqueValue *_src,
@@ -2833,8 +2945,7 @@ swift_cvw_assignWithCopyImpl(swift::OpaqueValue *_dest,
   uintptr_t addrOffset = 0;
 
 #if defined(__APPLE__) && defined(__arm64__)
-  handleRefCounts(assignWithCopyTable, CONTINUE_WITH_COPY, metadata, reader,
-                  addrOffset, dest, src);
+  handleRefCountsAssigningInline(metadata, reader, addrOffset, dest, src);
 #else
   handleRefCountsAssignWithCopy(metadata, reader, addrOffset, dest, src);
 #endif
@@ -2856,8 +2967,7 @@ void swift::swift_cvw_arrayAssignWithCopy(swift::OpaqueValue *_dest,
     uintptr_t addrOffset = i * stride;
 
 #if defined(__APPLE__) && defined(__arm64__)
-    handleRefCounts(assignWithCopyTable, CONTINUE_WITH_COPY, metadata, reader,
-                    addrOffset, dest, src);
+    handleRefCountsAssigningInline(metadata, reader, addrOffset, dest, src);
 #else
     handleRefCountsAssignWithCopy(metadata, reader, addrOffset, dest, src);
 #endif
