@@ -176,6 +176,15 @@ static inline bool isTaggedOrNonNativeBridgeObject(void *object) {
                                heap_object_abi::BridgeObjectTagBitsMask |
                                objectPointerIsObjCBit)) != 0;
 }
+
+/// Is the given BridgeObject a tagged value, such as a small string? Tagged
+/// values aren't reference counted: swift_bridgeObjectRetain/Release return
+/// right away for them.
+SWIFT_ALWAYS_INLINE
+static inline bool isTaggedBridgeObject(void *object) {
+  return (uintptr_t(object) & (heap_object_abi::ObjCReservedBitsMask |
+                               heap_object_abi::BridgeObjectTagBitsMask)) != 0;
+}
 #endif
 
 SWIFT_ALWAYS_INLINE
@@ -214,7 +223,9 @@ SWIFT_ALWAYS_INLINE
 static inline void layoutStringBridgeRetain(void *object) {
 #if SWIFT_LAYOUT_STRING_INLINE_RETAIN_RELEASE
   if (SWIFT_UNLIKELY(isTaggedOrNonNativeBridgeObject(object))) {
-    swift_bridgeObjectRetain(object);
+    // Tagged values (small strings) aren't reference counted.
+    if (!isTaggedBridgeObject(object))
+      swift_bridgeObjectRetain(object);
     return;
   }
   layoutStringRetain(
@@ -228,7 +239,9 @@ SWIFT_ALWAYS_INLINE
 static inline void layoutStringBridgeRelease(void *object) {
 #if SWIFT_LAYOUT_STRING_INLINE_RETAIN_RELEASE
   if (SWIFT_UNLIKELY(isTaggedOrNonNativeBridgeObject(object))) {
-    swift_bridgeObjectRelease(object);
+    // Tagged values (small strings) aren't reference counted.
+    if (!isTaggedBridgeObject(object))
+      swift_bridgeObjectRelease(object);
     return;
   }
   layoutStringRelease(
@@ -1339,10 +1352,11 @@ SWIFT_NOINLINE static void destroySlow(const Metadata *metadata,
 
 // Destroys a value with a walk that handles only the most common kinds, so that
 // it needs few registers and saves as few callee-saved registers as possible:
-// End, native strong references, native bridge objects and multi-payload enums
-// one level deep. It calls nothing with the standard calling convention except
-// an enum's getEnumTag; the ref counting slow paths are preserve_most. For
-// anything else, it hands off to destroySlow at the current tag.
+// End, native strong references, native and tagged bridge objects and
+// multi-payload enums one level deep. It calls nothing with the standard
+// calling convention except an enum's getEnumTag; the ref counting slow paths
+// are preserve_most. For anything else, it hands off to destroySlow at the
+// current tag.
 //
 // It is noinline so that hot/cold splitting leaves it alone: outlined cold code
 // is called with the standard calling convention, which would force saving
@@ -1419,8 +1433,13 @@ NativeStrong:
 Bridge:
   {
     void *object = *(void **)(addr + addrOffset);
-    if (SWIFT_UNLIKELY(isTaggedOrNonNativeBridgeObject(object)))
-      goto Slow;
+    if (SWIFT_UNLIKELY(isTaggedOrNonNativeBridgeObject(object))) {
+      // Tagged values (small strings) aren't reference counted.
+      if (!isTaggedBridgeObject(object))
+        goto Slow;
+      addrOffset += sizeof(void *);
+      DESTROY_FAST_NEXT();
+    }
     addrOffset += sizeof(void *);
     layoutStringRelease((HeapObject *)(uintptr_t(object) &
                                        ~heap_object_abi::SwiftSpareBitsMask));
