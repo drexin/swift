@@ -1133,6 +1133,182 @@ func testMultiPayloadEnumNested() {
 
 testMultiPayloadEnumNested()
 
+var deepNestTrackedLive = 0
+
+final class DeepNestTracked: CustomStringConvertible {
+    let id: Int
+
+    init(_ id: Int) {
+        self.id = id
+        deepNestTrackedLive += 1
+    }
+
+    deinit {
+        deepNestTrackedLive -= 1
+    }
+
+    var description: String { "#\(id)" }
+}
+
+// Multi-payload enums nested 12 levels deep: more than the layout string
+// witnesses walk inline before taking the call. Each level has a ref-counted
+// field after the nested enum, so the walk has to resume correctly after it,
+// and every other level has bytes to copy before the nested enum.
+enum DeepNest0 { case a(DeepNestTracked, String); case b(DeepNestTracked); case c }
+enum DeepNest1 { case a(DeepNestTracked, Int, DeepNest0, DeepNestTracked); case b(DeepNestTracked); case c }
+enum DeepNest2 { case a(DeepNestTracked, DeepNest1, DeepNestTracked); case b(DeepNestTracked); case c }
+enum DeepNest3 { case a(DeepNestTracked, Int, DeepNest2, DeepNestTracked); case b(DeepNestTracked); case c }
+enum DeepNest4 { case a(DeepNestTracked, DeepNest3, DeepNestTracked); case b(DeepNestTracked); case c }
+enum DeepNest5 { case a(DeepNestTracked, Int, DeepNest4, DeepNestTracked); case b(DeepNestTracked); case c }
+enum DeepNest6 { case a(DeepNestTracked, DeepNest5, DeepNestTracked); case b(DeepNestTracked); case c }
+enum DeepNest7 { case a(DeepNestTracked, Int, DeepNest6, DeepNestTracked); case b(DeepNestTracked); case c }
+enum DeepNest8 { case a(DeepNestTracked, DeepNest7, DeepNestTracked); case b(DeepNestTracked); case c }
+enum DeepNest9 { case a(DeepNestTracked, Int, DeepNest8, DeepNestTracked); case b(DeepNestTracked); case c }
+enum DeepNest10 { case a(DeepNestTracked, DeepNest9, DeepNestTracked); case b(DeepNestTracked); case c }
+enum DeepNest11 { case a(DeepNestTracked, Int, DeepNest10, DeepNestTracked); case b(DeepNestTracked); case c }
+
+struct DeepNestWrapper: CustomStringConvertible {
+    let x: DeepNestTracked
+    let i: Int
+    let y: DeepNest11
+    let j: Int
+    weak var w: DeepNestTracked?
+    let z: DeepNestTracked
+
+    var description: String { "\(x) \(i) \(y) \(j) \(w.map { "\($0)" } ?? "nil") \(z)" }
+}
+
+// Level `stop` is in case b (or c if `empty`), all levels above it in case a.
+// A `stop` below 0 makes every level case a.
+func makeDeepNest0(_ id: Int, _ stop: Int, _ empty: Bool) -> DeepNest0 {
+    stop == 0 ? (empty ? .c : .b(DeepNestTracked(id))) : .a(DeepNestTracked(id), "heap string at level 0, \(id)")
+}
+func makeDeepNest1(_ id: Int, _ stop: Int, _ empty: Bool) -> DeepNest1 {
+    stop == 1 ? (empty ? .c : .b(DeepNestTracked(id))) : .a(DeepNestTracked(id), id, makeDeepNest0(id + 1, stop, empty), DeepNestTracked(id + 100))
+}
+func makeDeepNest2(_ id: Int, _ stop: Int, _ empty: Bool) -> DeepNest2 {
+    stop == 2 ? (empty ? .c : .b(DeepNestTracked(id))) : .a(DeepNestTracked(id), makeDeepNest1(id + 1, stop, empty), DeepNestTracked(id + 100))
+}
+func makeDeepNest3(_ id: Int, _ stop: Int, _ empty: Bool) -> DeepNest3 {
+    stop == 3 ? (empty ? .c : .b(DeepNestTracked(id))) : .a(DeepNestTracked(id), id, makeDeepNest2(id + 1, stop, empty), DeepNestTracked(id + 100))
+}
+func makeDeepNest4(_ id: Int, _ stop: Int, _ empty: Bool) -> DeepNest4 {
+    stop == 4 ? (empty ? .c : .b(DeepNestTracked(id))) : .a(DeepNestTracked(id), makeDeepNest3(id + 1, stop, empty), DeepNestTracked(id + 100))
+}
+func makeDeepNest5(_ id: Int, _ stop: Int, _ empty: Bool) -> DeepNest5 {
+    stop == 5 ? (empty ? .c : .b(DeepNestTracked(id))) : .a(DeepNestTracked(id), id, makeDeepNest4(id + 1, stop, empty), DeepNestTracked(id + 100))
+}
+func makeDeepNest6(_ id: Int, _ stop: Int, _ empty: Bool) -> DeepNest6 {
+    stop == 6 ? (empty ? .c : .b(DeepNestTracked(id))) : .a(DeepNestTracked(id), makeDeepNest5(id + 1, stop, empty), DeepNestTracked(id + 100))
+}
+func makeDeepNest7(_ id: Int, _ stop: Int, _ empty: Bool) -> DeepNest7 {
+    stop == 7 ? (empty ? .c : .b(DeepNestTracked(id))) : .a(DeepNestTracked(id), id, makeDeepNest6(id + 1, stop, empty), DeepNestTracked(id + 100))
+}
+func makeDeepNest8(_ id: Int, _ stop: Int, _ empty: Bool) -> DeepNest8 {
+    stop == 8 ? (empty ? .c : .b(DeepNestTracked(id))) : .a(DeepNestTracked(id), makeDeepNest7(id + 1, stop, empty), DeepNestTracked(id + 100))
+}
+func makeDeepNest9(_ id: Int, _ stop: Int, _ empty: Bool) -> DeepNest9 {
+    stop == 9 ? (empty ? .c : .b(DeepNestTracked(id))) : .a(DeepNestTracked(id), id, makeDeepNest8(id + 1, stop, empty), DeepNestTracked(id + 100))
+}
+func makeDeepNest10(_ id: Int, _ stop: Int, _ empty: Bool) -> DeepNest10 {
+    stop == 10 ? (empty ? .c : .b(DeepNestTracked(id))) : .a(DeepNestTracked(id), makeDeepNest9(id + 1, stop, empty), DeepNestTracked(id + 100))
+}
+func makeDeepNest11(_ id: Int, _ stop: Int, _ empty: Bool) -> DeepNest11 {
+    stop == 11 ? (empty ? .c : .b(DeepNestTracked(id))) : .a(DeepNestTracked(id), id, makeDeepNest10(id + 1, stop, empty), DeepNestTracked(id + 100))
+}
+
+func makeDeepNestWrapper(_ id: Int, _ stop: Int, _ empty: Bool) -> DeepNestWrapper {
+    let z = DeepNestTracked(id + 200)
+    return DeepNestWrapper(x: DeepNestTracked(id), i: id, y: makeDeepNest11(id + 1, stop, empty), j: id + 1, w: z, z: z)
+}
+
+func testDeepNestedMultiPayloadEnum() {
+    // The innermost level in case a, levels within and past the depth the
+    // witnesses walk inline, and the outermost levels.
+    let stops = [-1, 0, 1, 2, 3, 5, 8, 9, 10, 11]
+    var shapes: [(stop: Int, empty: Bool)] = []
+    for stop in stops {
+        shapes.append((stop, false))
+        if stop >= 0 {
+            shapes.append((stop, true))
+        }
+    }
+    var mismatches = 0
+
+    func check(_ what: String, _ a: DeepNestWrapper, _ b: DeepNestWrapper) {
+        let x = String(describing: a)
+        let y = String(describing: b)
+        if x != y {
+            mismatches += 1
+            print("\(what): \(x) != \(y)")
+        }
+    }
+
+    do {
+        let count = shapes.count
+        let src = UnsafeMutableBufferPointer<DeepNestWrapper>.allocate(capacity: count)
+        let dest = UnsafeMutableBufferPointer<DeepNestWrapper>.allocate(capacity: count)
+        for (i, shape) in shapes.enumerated() {
+            (src.baseAddress! + i).initialize(to: makeDeepNestWrapper(1000 * i, shape.stop, shape.empty))
+        }
+
+        // arrayInitWithCopy
+        testGenericArrayInitWithCopy(dest: dest, src: src)
+        for i in 0..<count {
+            check("arrayInitWithCopy \(shapes[i])", dest[i], src[i])
+        }
+
+        // init, initWithTake, assignWithCopy into every other shape and back
+        // and destroy, one value at a time
+        let ptr = UnsafeMutablePointer<DeepNestWrapper>.allocate(capacity: 1)
+        for i in 0..<count {
+            for j in 0..<count {
+                var x = makeDeepNestWrapper(1000 * j + 500, shapes[j].stop, shapes[j].empty)
+                testInit(ptr, to: x)
+                check("init \(shapes[j])", ptr.pointee, x)
+                testAssignCopyValue(ptr, from: src[i])
+                check("assignWithCopy \(shapes[j]) <- \(shapes[i])", ptr.pointee, src[i])
+                testAssignCopy(ptr, from: &x)
+                check("arrayAssignWithCopy \(shapes[i]) <- \(shapes[j])", ptr.pointee, x)
+                testDestroy(ptr)
+                testInitTake(ptr, to: makeDeepNestWrapper(1000 * j + 700, shapes[j].stop, shapes[j].empty))
+                testAssignCopyValue(ptr, from: x)
+                check("assignWithCopy same shape \(shapes[j])", ptr.pointee, x)
+                testDestroy(ptr)
+            }
+        }
+        ptr.deallocate()
+
+        // arrayAssignWithCopy from values of other shapes and back
+        let other = UnsafeMutableBufferPointer<DeepNestWrapper>.allocate(capacity: count)
+        for i in 0..<count {
+            let shape = shapes[(i + 1) % count]
+            (other.baseAddress! + i).initialize(to: makeDeepNestWrapper(1000 * i + 300, shape.stop, shape.empty))
+        }
+        testGenericArrayAssignWithCopy(dest: dest, src: other)
+        for i in 0..<count {
+            check("arrayAssignWithCopy \(shapes[i]) <- \(shapes[(i + 1) % count])", dest[i], other[i])
+        }
+        testGenericArrayAssignWithCopy(dest: dest, src: src)
+        for i in 0..<count {
+            check("arrayAssignWithCopy \(shapes[(i + 1) % count]) <- \(shapes[i])", dest[i], src[i])
+        }
+        testGenericArrayDestroy(other)
+        other.deallocate()
+
+        // arrayDestroy
+        testGenericArrayDestroy(dest)
+        testGenericArrayDestroy(src)
+        dest.deallocate()
+        src.deallocate()
+    }
+
+    // CHECK-NEXT: deep nested multi-payload enums: mismatches: 0, live: 0
+    print("deep nested multi-payload enums: mismatches: \(mismatches), live: \(deepNestTrackedLive)")
+}
+
+testDeepNestedMultiPayloadEnum()
+
 struct MyError: Error {
     let x: SimpleClass
 }

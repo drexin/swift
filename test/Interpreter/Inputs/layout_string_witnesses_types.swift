@@ -722,6 +722,12 @@ public func testAssignCopy<T>(_ ptr: UnsafeMutablePointer<T>, from x: inout T) {
     ptr.update(from: &x, count: 1)
 }
 
+// assignWithCopy of a single value. (testAssignCopy calls arrayAssignWithCopy.)
+@inline(never)
+public func testAssignCopyValue<T>(_ ptr: UnsafeMutablePointer<T>, from x: T) {
+    ptr.pointee = x
+}
+
 @inline(never)
 public func testInit<T: ~Copyable>(_ ptr: UnsafeMutablePointer<T>, to x: consuming T) {
     ptr.initialize(to: x)
