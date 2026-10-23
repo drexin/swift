@@ -1581,11 +1581,11 @@ SWIFT_NOINLINE static void destroySlow(const Metadata *metadata,
 
 // Destroys a value with a walk that handles only the most common kinds, so that
 // it needs few registers and saves as few callee-saved registers as possible:
-// End, native strong references, native and tagged bridge objects,
+// End, native strong references, native and tagged bridge objects, blocks,
 // existentials and multi-payload enums one level deep. It calls nothing with
-// the standard calling convention except an enum's getEnumTag and the destroy
-// witness of a value inline in an existential; the ref counting slow paths are
-// preserve_most. For anything else, it hands off to destroySlow at the
+// the standard calling convention except an enum's getEnumTag, _Block_release
+// and the destroy witness of a value inline in an existential; the ref
+// counting slow paths are preserve_most. For anything else, it hands off to destroySlow at the
 // current tag.
 //
 // It is noinline so that hot/cold splitting leaves it alone: outlined cold code
@@ -1606,7 +1606,7 @@ SWIFT_NOINLINE static void destroyFast(const Metadata *metadata,
   static const void *const dispatchTable[] = {
       &&End,  &&Slow,                 &&NativeStrong, &&Slow,
       &&Slow, &&Slow,                 &&Slow,         &&Slow,
-      &&Bridge, &&Slow,               &&Slow,         &&Slow,
+      &&Bridge, &&Block,              &&Slow,         &&Slow,
       &&Slow, &&Slow,                 &&Existential,  &&Slow,
       &&Slow, &&Slow,                 &&Slow,         &&Slow,
       &&MultiPayloadEnumFN, &&MultiPayloadEnumFNResolved,
@@ -1675,6 +1675,19 @@ Bridge:
                                        ~heap_object_abi::SwiftSpareBitsMask));
     DESTROY_FAST_NEXT();
   }
+
+Block:
+#if SWIFT_OBJC_INTEROP
+  {
+    uintptr_t object = *(uintptr_t *)(addr + addrOffset) &
+                       ~_swift_abi_SwiftSpareBitsMask;
+    addrOffset += sizeof(void *);
+    _Block_release((void *)object);
+    DESTROY_FAST_NEXT();
+  }
+#else
+  goto Slow;
+#endif
 
 Existential:
   {
