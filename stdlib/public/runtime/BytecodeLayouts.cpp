@@ -2190,6 +2190,9 @@ static void errorAssignWithCopy(const Metadata *metadata,
   swift_errorRetain((SwiftError *)srcObject);
 }
 
+// Always inlined: left to the inliner, the assignWithCopy walk called this out
+// of line for every reference, with the walk's offset in memory.
+SWIFT_ALWAYS_INLINE
 static void nativeStrongAssignWithCopy(const Metadata *metadata,
                              LayoutStringReader1 &reader,
                              uintptr_t &addrOffset,
@@ -2239,6 +2242,8 @@ static void unknownAssignWithCopy(const Metadata *metadata,
   swift_unknownObjectRetain((void *)srcObject);
 }
 
+// Always inlined; see nativeStrongAssignWithCopy.
+SWIFT_ALWAYS_INLINE
 static void bridgeAssignWithCopy(const Metadata *metadata,
                                  LayoutStringReader1 &reader,
                                  uintptr_t &addrOffset, uint8_t *dest,
