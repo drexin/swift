@@ -392,6 +392,15 @@ func testExistentialStructBox() {
         testAssignCopy(ptr, from: &wrapper)
     }
 
+    // initWithCopy: the copy shares the box, so destroying it deinitializes
+    // nothing
+    do {
+        let copy = UnsafeMutablePointer<ExistentialWrapper>.allocate(capacity: 1)
+        testInitCopyValue(copy, from: ptr.pointee)
+        testDestroy(copy)
+        copy.deallocate()
+    }
+
     // CHECK-NEXT: Before deinit
     print("Before deinit")
 

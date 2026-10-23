@@ -1494,7 +1494,7 @@ static void existentialDestroy(const Metadata *metadata,
   if (type->getValueWitnesses()->isValueInline()) {
     type->vw_destroy(object);
   } else {
-    swift_release(*(HeapObject**)object);
+    layoutStringRelease(*(HeapObject**)object);
   }
 }
 
@@ -1581,10 +1581,11 @@ SWIFT_NOINLINE static void destroySlow(const Metadata *metadata,
 
 // Destroys a value with a walk that handles only the most common kinds, so that
 // it needs few registers and saves as few callee-saved registers as possible:
-// End, native strong references, native and tagged bridge objects and
-// multi-payload enums one level deep. It calls nothing with the standard
-// calling convention except an enum's getEnumTag; the ref counting slow paths
-// are preserve_most. For anything else, it hands off to destroySlow at the
+// End, native strong references, native and tagged bridge objects,
+// existentials and multi-payload enums one level deep. It calls nothing with
+// the standard calling convention except an enum's getEnumTag and the destroy
+// witness of a value inline in an existential; the ref counting slow paths are
+// preserve_most. For anything else, it hands off to destroySlow at the
 // current tag.
 //
 // It is noinline so that hot/cold splitting leaves it alone: outlined cold code
@@ -1606,7 +1607,7 @@ SWIFT_NOINLINE static void destroyFast(const Metadata *metadata,
       &&End,  &&Slow,                 &&NativeStrong, &&Slow,
       &&Slow, &&Slow,                 &&Slow,         &&Slow,
       &&Bridge, &&Slow,               &&Slow,         &&Slow,
-      &&Slow, &&Slow,                 &&Slow,         &&Slow,
+      &&Slow, &&Slow,                 &&Existential,  &&Slow,
       &&Slow, &&Slow,                 &&Slow,         &&Slow,
       &&MultiPayloadEnumFN, &&MultiPayloadEnumFNResolved,
       &&MultiPayloadEnumGeneric,
@@ -1672,6 +1673,18 @@ Bridge:
     addrOffset += sizeof(void *);
     layoutStringRelease((HeapObject *)(uintptr_t(object) &
                                        ~heap_object_abi::SwiftSpareBitsMask));
+    DESTROY_FAST_NEXT();
+  }
+
+Existential:
+  {
+    auto *object = (OpaqueValue *)(addr + addrOffset);
+    const Metadata *type = getExistentialTypeMetadata(object);
+    addrOffset += sizeof(uintptr_t) * NumWords_ValueBuffer;
+    if (type->getValueWitnesses()->isValueInline())
+      type->vw_destroy(object);
+    else
+      layoutStringRelease(*(HeapObject **)object);
     DESTROY_FAST_NEXT();
   }
 
@@ -1887,10 +1900,18 @@ static void existentialInitWithCopy(const Metadata *metadata,
                                     uint8_t *src) {
   uintptr_t _addrOffset = addrOffset;
   auto *type = getExistentialTypeMetadata((OpaqueValue*)(src + _addrOffset));
-  auto *destObject = (ValueBuffer *)(dest + _addrOffset);
-  auto *srcObject = (ValueBuffer *)(src + _addrOffset);
+  auto *destObject = (OpaqueValue *)(dest + _addrOffset);
+  auto *srcObject = (OpaqueValue *)(src + _addrOffset);
   addrOffset = _addrOffset + (sizeof(uintptr_t) * NumWords_ValueBuffer);
-  type->vw_initializeBufferWithCopyOfBuffer(destObject, srcObject);
+  // What initializeBufferWithCopyOfBuffer does, without calling through the
+  // type's witness table for a value in a box.
+  if (type->getValueWitnesses()->isValueInline()) {
+    type->vw_initializeWithCopy(destObject, srcObject);
+  } else {
+    HeapObject *box = *(HeapObject **)srcObject;
+    memcpy(destObject, &box, sizeof(HeapObject *));
+    layoutStringRetain(box);
+  }
 }
 
 static void resilientInitWithCopy(const Metadata *metadata,
@@ -2392,9 +2413,12 @@ static void existentialAssignWithCopy(const Metadata *metadata,
     if (srcType->getValueWitnesses()->isValueInline()) {
       srcType->vw_assignWithCopy(destObject, srcObject);
     } else {
-      swift_release(*(HeapObject**)destObject);
-      memcpy(destObject, srcObject, sizeof(uintptr_t));
-      swift_retain(*(HeapObject**)srcObject);
+      HeapObject *destBox = *(HeapObject **)destObject;
+      HeapObject *srcBox = *(HeapObject **)srcObject;
+      memcpy(destObject, &srcBox, sizeof(HeapObject *));
+      // Retain first, in case both are the same box.
+      layoutStringRetain(srcBox);
+      layoutStringRelease(destBox);
     }
     return;
   }
@@ -2402,14 +2426,14 @@ static void existentialAssignWithCopy(const Metadata *metadata,
   if (destType->getValueWitnesses()->isValueInline()) {
       destType->vw_destroy(destObject);
   } else {
-    swift_release(*(HeapObject**)destObject);
+    layoutStringRelease(*(HeapObject**)destObject);
   }
 
   if (srcType->getValueWitnesses()->isValueInline()) {
     srcType->vw_initializeWithCopy(destObject, srcObject);
   } else {
     memcpy(destObject, srcObject, sizeof(uintptr_t));
-    swift_retain(*(HeapObject**)srcObject);
+    layoutStringRetain(*(HeapObject**)srcObject);
   }
 }
 

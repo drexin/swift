@@ -733,6 +733,12 @@ public func testInit<T: ~Copyable>(_ ptr: UnsafeMutablePointer<T>, to x: consumi
     ptr.initialize(to: x)
 }
 
+// initWithCopy of a single value.
+@inline(never)
+public func testInitCopyValue<T>(_ ptr: UnsafeMutablePointer<T>, from x: T) {
+    ptr.initialize(to: x)
+}
+
 @inline(never)
 public func testInitTake<T>(_ ptr: UnsafeMutablePointer<T>, to x: consuming T) {
     ptr.initialize(to: consume x)
