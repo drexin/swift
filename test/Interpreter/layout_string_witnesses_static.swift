@@ -1384,6 +1384,93 @@ func testSameLayoutPayloadCaseChange() {
 
 testSameLayoutPayloadCaseChange()
 
+// assignWithCopy of multi-payload enums across a change of case, where the
+// payloads have ref counts that the case change handles inline (native
+// references, strings) before and after ones that it doesn't (weak references,
+// existentials, closures, nested enums).
+struct WeakDeepNestRef: CustomStringConvertible {
+    weak var object: DeepNestTracked?
+
+    var description: String { "weak(\(object.map { "\($0)" } ?? "nil"))" }
+}
+
+enum MixedPayloads: CustomStringConvertible {
+    case a(DeepNestTracked, WeakDeepNestRef, DeepNestTracked)
+    case b(String, Any, DeepNestTracked)
+    case c(DeepNestTracked, () -> String)
+    case d(String, DeepNest1, DeepNestTracked)
+    case e
+
+    var description: String {
+        switch self {
+        case .a(let x, let w, let y): "a(\(x), \(w), \(y))"
+        case .b(let s, let v, let x): "b(\(s), \(v), \(x))"
+        case .c(let x, let f): "c(\(x), \(f()))"
+        case .d(let s, let n, let x): "d(\(s), \(n), \(x))"
+        case .e: "e"
+        }
+    }
+}
+
+struct MixedPayloadsWrapper {
+    let id: Int
+    let payloads: MixedPayloads
+    let x: DeepNestTracked
+}
+
+func makeMixedPayloads(_ id: Int, _ shape: Int, weakTarget: DeepNestTracked) -> MixedPayloads {
+    switch shape {
+    case 0: return .a(DeepNestTracked(id), WeakDeepNestRef(object: weakTarget), DeepNestTracked(id + 1))
+    case 1: return .b("heap string payload number \(id)", DeepNestTracked(id + 2), DeepNestTracked(id + 3))
+    case 2:
+        let captured = DeepNestTracked(id + 4)
+        return .c(DeepNestTracked(id + 5), { "closure \(captured)" })
+    case 3:
+        return .d("s\(id % 10)", .a(DeepNestTracked(id + 6), id, .a(DeepNestTracked(id + 7), "nested"),
+                                    DeepNestTracked(id + 8)), DeepNestTracked(id + 9))
+    default: return .e
+    }
+}
+
+func testMixedPayloadsCaseChange() {
+    var mismatches = 0
+    do {
+        let weakTarget = DeepNestTracked(-1)
+        let ptr = UnsafeMutablePointer<MixedPayloads>.allocate(capacity: 1)
+        let wrapperPtr = UnsafeMutablePointer<MixedPayloadsWrapper>.allocate(capacity: 1)
+        for i in 0..<5 {
+            for j in 0..<5 {
+                let x = makeMixedPayloads(100 * i, i, weakTarget: weakTarget)
+                let y = makeMixedPayloads(100 * j + 50, j, weakTarget: weakTarget)
+                testInitCopyValue(ptr, from: x)
+                testAssignCopyValue(ptr, from: y)
+                if String(describing: ptr.pointee) != String(describing: y) {
+                    mismatches += 1
+                    print("\(i) <- \(j): \(ptr.pointee) != \(y)")
+                }
+                testDestroy(ptr)
+
+                let wx = MixedPayloadsWrapper(id: i, payloads: x, x: DeepNestTracked(1000 + i))
+                let wy = MixedPayloadsWrapper(id: j, payloads: y, x: DeepNestTracked(2000 + j))
+                testInitCopyValue(wrapperPtr, from: wx)
+                testAssignCopyValue(wrapperPtr, from: wy)
+                if String(describing: wrapperPtr.pointee) != String(describing: wy) {
+                    mismatches += 1
+                    print("wrapper \(i) <- \(j): \(wrapperPtr.pointee) != \(wy)")
+                }
+                testDestroy(wrapperPtr)
+            }
+        }
+        ptr.deallocate()
+        wrapperPtr.deallocate()
+    }
+
+    // CHECK-NEXT: mixed payloads case change: mismatches: 0, live: 0
+    print("mixed payloads case change: mismatches: \(mismatches), live: \(deepNestTrackedLive)")
+}
+
+testMixedPayloadsCaseChange()
+
 struct MyError: Error {
     let x: SimpleClass
 }

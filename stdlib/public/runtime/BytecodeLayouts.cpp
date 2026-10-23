@@ -1998,6 +1998,16 @@ DEFINE_NESTED_WALK(initWithCopyNested, initWithCopyTable, CONTINUE_WITH_COPY,
 DEFINE_NESTED_WALK(initWithCopyPrecopiedNested, initWithCopyTable,
                    CONTINUE_PRECOPIED, false, (uint8_t *dest, uint8_t *src),
                    (dest, src))
+
+// initWithCopy of the ref counts from `reader` on, at `addrOffset`, whose bytes
+// the caller already copied: the payload of a multi-payload enum.
+SWIFT_NOINLINE static void initWithCopyPrecopied(const Metadata *metadata,
+                                                 LayoutStringReader1 reader,
+                                                 uintptr_t addrOffset,
+                                                 uint8_t *dest, uint8_t *src) {
+  handleRefCounts(initWithCopyTable, CONTINUE_PRECOPIED, metadata, reader,
+                  addrOffset, dest, src);
+}
 #endif
 
 static void handleRefCountsInitWithCopy(const Metadata *metadata,
@@ -2990,13 +3000,44 @@ static void multiPayloadEnumFNAssignWithCopy(const Metadata *metadata,
 }
 
 #if defined(__APPLE__) && defined(__arm64__)
+#if SWIFT_LAYOUT_STRING_INLINE_RETAIN_RELEASE
+// The rest of assignMultiPayloadEnumChangingCase after its loop over dest's
+// payload met a kind it doesn't handle at `destReader`: destroys the rest of
+// dest's payload, copies the enum's bytes and retains src's payload, if
+// `srcReader` isn't null.
+SWIFT_NOINLINE static void assignMultiPayloadEnumChangingCaseDestroySlow(
+    const Metadata *metadata, LayoutStringReader1 destReader,
+    uintptr_t destAddrOffset, LayoutStringReader1 srcReader,
+    uintptr_t enumStart, size_t enumSize, uint8_t *dest, uint8_t *src) {
+  destroyRefCounts(metadata, destReader, destAddrOffset, dest);
+  layoutStringMemcpy(dest + enumStart, src + enumStart, enumSize);
+  if (srcReader.layoutStr)
+    initWithCopyPrecopied(metadata, srcReader, enumStart, dest, src);
+}
+
+// The rest of assignMultiPayloadEnumChangingCase after its loop over src's
+// payload met a kind it doesn't handle at `srcReader`: copies the enum's bytes
+// and handles the rest of src's payload.
+SWIFT_NOINLINE static void assignMultiPayloadEnumChangingCaseRetainSlow(
+    const Metadata *metadata, LayoutStringReader1 srcReader,
+    uintptr_t srcAddrOffset, uintptr_t enumStart, size_t enumSize,
+    uint8_t *dest, uint8_t *src) {
+  layoutStringMemcpy(dest + enumStart, src + enumStart, enumSize);
+  initWithCopyPrecopied(metadata, srcReader, srcAddrOffset, dest, src);
+}
+#endif
+
 // assignWithCopy of a multi-payload enum at `enumStart`, unless dest and src
 // are in the same case and its payload has ref counts. `header` is at the
 // enum's number of payloads, followed by its ref count bytes, size and table
 // of payload ref count offsets. (Reading those here instead of taking them as
-// arguments keeps all arguments in registers.) Payloads are small, so this
-// uses the table-driven walks, which save fewer registers than the inlined
-// ones.
+// arguments keeps all arguments in registers.)
+//
+// It releases dest's payload, retains src's payload and then copies all bytes
+// of the enum at once. Its loops over the payloads handle End, native strong
+// references and native and tagged bridge objects themselves, whose slow paths
+// are preserve_most, so that it saves no callee-saved registers; for anything
+// else, they hand the rest of the assignment off to a noinline function.
 SWIFT_NOINLINE static void assignMultiPayloadEnumChangingCase(
     const Metadata *metadata, LayoutStringReader1 header, uint64_t srcTag,
     uint64_t destTag, uintptr_t enumStart, uint8_t *dest, uint8_t *src) {
@@ -3005,26 +3046,96 @@ SWIFT_NOINLINE static void assignMultiPayloadEnumChangingCase(
   size_t enumSize;
   header.readBytes(numPayloads, refCountBytes, enumSize);
   LayoutStringReader1 payloadOffsets = header;
+  // The ref counts of case `tag`'s payload, or null if it has none. (Checking
+  // for End here keeps the loops below out of the way of payloads without ref
+  // counts.)
   auto payloadRefCounts = [&](uint64_t tag) {
+    if (tag >= numPayloads)
+      return LayoutStringReader1{nullptr};
     LayoutStringReader1 reader = payloadOffsets;
     reader.skip(numPayloads * sizeof(size_t) +
                 payloadOffsets.peekBytes<size_t>(tag * sizeof(size_t)));
+    if ((reader.peekBytes<uint64_t>() >> 56) == (uint64_t)RefCountingKind::End)
+      return LayoutStringReader1{nullptr};
     return reader;
   };
-  if (destTag < numPayloads) {
-    LayoutStringReader1 reader = payloadRefCounts(destTag);
+  LayoutStringReader1 destReader = payloadRefCounts(destTag);
+  LayoutStringReader1 srcReader = payloadRefCounts(srcTag);
+#if SWIFT_LAYOUT_STRING_INLINE_RETAIN_RELEASE
+  if (destReader.layoutStr) {
     uintptr_t addrOffset = enumStart;
-    handleRefCountsDestroy(metadata, reader, addrOffset, dest);
+    uint64_t tag = destReader.readBytes<uint64_t>();
+    do {
+      addrOffset += tag & ~(0xFFULL << 56);
+      auto kind = RefCountingKind(tag >> 56);
+      if (kind == RefCountingKind::NativeStrong) {
+        layoutStringRelease((HeapObject *)(*(uintptr_t *)(dest + addrOffset) &
+                                           ~_swift_abi_SwiftSpareBitsMask));
+      } else {
+        // Other kinds may be shorter than a pointer.
+        void *object = kind == RefCountingKind::Bridge
+                           ? *(void **)(dest + addrOffset)
+                           : nullptr;
+        if (kind != RefCountingKind::Bridge ||
+            (SWIFT_UNLIKELY(isTaggedOrNonNativeBridgeObject(object)) &&
+             !isTaggedBridgeObject(object))) {
+          destReader.layoutStr -= sizeof(uint64_t);
+          addrOffset -= tag & ~(0xFFULL << 56);
+          return assignMultiPayloadEnumChangingCaseDestroySlow(
+              metadata, destReader, addrOffset, srcReader, enumStart, enumSize,
+              dest, src);
+        }
+        if (!isTaggedOrNonNativeBridgeObject(object))
+          layoutStringRelease(
+              (HeapObject *)(uintptr_t(object) &
+                             ~heap_object_abi::SwiftSpareBitsMask));
+      }
+      addrOffset += sizeof(void *);
+      tag = destReader.readBytes<uint64_t>();
+    } while ((tag >> 56) != (uint64_t)RefCountingKind::End);
   }
-  uintptr_t addrOffset = enumStart;
-  if (srcTag < numPayloads) {
-    LayoutStringReader1 reader = payloadRefCounts(srcTag);
-    handleRefCountsInitWithCopy(metadata, reader, addrOffset, dest, src);
+  // Only reads src, so it can come before the copy.
+  if (srcReader.layoutStr) {
+    uintptr_t addrOffset = enumStart;
+    uint64_t tag = srcReader.readBytes<uint64_t>();
+    do {
+      addrOffset += tag & ~(0xFFULL << 56);
+      auto kind = RefCountingKind(tag >> 56);
+      if (kind == RefCountingKind::NativeStrong) {
+        layoutStringRetain((HeapObject *)(*(uintptr_t *)(src + addrOffset) &
+                                          ~_swift_abi_SwiftSpareBitsMask));
+      } else {
+        // Other kinds may be shorter than a pointer.
+        void *object = kind == RefCountingKind::Bridge
+                           ? *(void **)(src + addrOffset)
+                           : nullptr;
+        if (kind != RefCountingKind::Bridge ||
+            (SWIFT_UNLIKELY(isTaggedOrNonNativeBridgeObject(object)) &&
+             !isTaggedBridgeObject(object))) {
+          srcReader.layoutStr -= sizeof(uint64_t);
+          addrOffset -= tag & ~(0xFFULL << 56);
+          return assignMultiPayloadEnumChangingCaseRetainSlow(
+              metadata, srcReader, addrOffset, enumStart, enumSize, dest, src);
+        }
+        if (!isTaggedOrNonNativeBridgeObject(object))
+          layoutStringRetain(
+              (HeapObject *)(uintptr_t(object) &
+                             ~heap_object_abi::SwiftSpareBitsMask));
+      }
+      addrOffset += sizeof(void *);
+      tag = srcReader.readBytes<uint64_t>();
+    } while ((tag >> 56) != (uint64_t)RefCountingKind::End);
   }
-  uintptr_t enumEnd = enumStart + enumSize;
-  if (addrOffset != enumEnd)
-    layoutStringMemcpy(dest + addrOffset, src + addrOffset,
-                       enumEnd - addrOffset);
+  layoutStringMemcpy(dest + enumStart, src + enumStart, enumSize);
+#else
+  if (destReader.layoutStr) {
+    uintptr_t addrOffset = enumStart;
+    handleRefCountsDestroy(metadata, destReader, addrOffset, dest);
+  }
+  layoutStringMemcpy(dest + enumStart, src + enumStart, enumSize);
+  if (srcReader.layoutStr)
+    initWithCopyPrecopied(metadata, srcReader, enumStart, dest, src);
+#endif
 }
 
 // For mode 3 of handleRefCountsImpl: reads the header of the multi-payload
