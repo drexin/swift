@@ -320,6 +320,25 @@ static constexpr bool platformSupportsTaggedPointers() {
 
 #if defined(__APPLE__) && defined(__arm64__)
 
+// Copies the bytes between two ref-counted fields, `size` > 0. Runs of 8 to 16
+// bytes, such as an Int or two between references, are copied inline with two
+// 8-byte loads and stores, which overlap for sizes under 16: through
+// layoutStringMemcpy, the two loads and stores came with a call, a size
+// dispatch and a return.
+SWIFT_ALWAYS_INLINE static inline void copyGapBytes(uint8_t *dest,
+                                                    const uint8_t *src,
+                                                    size_t size) {
+  if (SWIFT_LIKELY(size - 8 <= 8)) {
+    uint64_t first, last;
+    memcpy(&first, src, sizeof(uint64_t));
+    memcpy(&last, src + size - sizeof(uint64_t), sizeof(uint64_t));
+    memcpy(dest, &first, sizeof(uint64_t));
+    memcpy(dest + size - sizeof(uint64_t), &last, sizeof(uint64_t));
+  } else {
+    layoutStringMemcpy(dest, src, size);
+  }
+}
+
 // Marks a dispatch of handleRefCountsImpl with an empty asm statement whose
 // text differs at each dispatch, so that tail merging can't turn the copies of
 // the dispatch into jumps to a shared one: each handler keeping its own
@@ -337,7 +356,7 @@ static constexpr bool platformSupportsTaggedPointers() {
     TAG = READER.readBytes<uint64_t>();                                        \
     OFFSET = (TAG & ~(0xFFULL << 56));                                         \
     if (OFFSET) {                                                              \
-      layoutStringMemcpy(DEST + ADDR_OFFSET, SRC + ADDR_OFFSET, OFFSET);       \
+      copyGapBytes(DEST + ADDR_OFFSET, SRC + ADDR_OFFSET, OFFSET);             \
     }                                                                          \
     ADDR_OFFSET += OFFSET;                                                     \
     TAG >>= 56;                                                                \
