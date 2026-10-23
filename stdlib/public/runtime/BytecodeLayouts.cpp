@@ -404,6 +404,20 @@ struct LayoutStringResumeStack {
   uintptr_t addrOffsets[capacity];
 };
 
+// Calls handler INDEX of FN_TABLE with copies of the walk's reader and offset,
+// so that the handler taking their addresses doesn't keep them in memory for
+// the whole walk: without the copies, the assignWithCopy walks stored their
+// offset to the stack on every dispatch.
+#define LS_CALL_HANDLER(FN_TABLE, INDEX, METADATA, READER, ADDR_OFFSET, ...)   \
+  do {                                                                         \
+    uintptr_t _handlerAddrOffset = ADDR_OFFSET;                                \
+    LayoutStringReader1 _handlerReader = READER;                               \
+    FN_TABLE[INDEX](METADATA, _handlerReader, _handlerAddrOffset,              \
+                    __VA_ARGS__);                                              \
+    READER = _handlerReader;                                                   \
+    ADDR_OFFSET = _handlerAddrOffset;                                          \
+  } while (false)
+
 // Walks a layout string with computed-goto dispatch. MODE says how the walk
 // handles multi-payload enums:
 //
@@ -486,62 +500,74 @@ struct LayoutStringResumeStack {
       [[clang::nomerge]] {                                                     \
       Error:                                                                   \
                                                                                \
-        FN_TABLE[1](METADATA, READER, ADDR_OFFSET, __VA_ARGS__);               \
+        LS_CALL_HANDLER(FN_TABLE, 1, METADATA, READER, ADDR_OFFSET,            \
+                        __VA_ARGS__);                                          \
         CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                  \
       }                                                                        \
       [[clang::nomerge]] {                                                     \
       NativeStrong:                                                            \
-        FN_TABLE[2](METADATA, READER, ADDR_OFFSET, __VA_ARGS__);               \
+        LS_CALL_HANDLER(FN_TABLE, 2, METADATA, READER, ADDR_OFFSET,            \
+                        __VA_ARGS__);                                          \
         CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                  \
       }                                                                        \
       [[clang::nomerge]] {                                                     \
       NativeUnowned:                                                           \
-        FN_TABLE[3](METADATA, READER, ADDR_OFFSET, __VA_ARGS__);               \
+        LS_CALL_HANDLER(FN_TABLE, 3, METADATA, READER, ADDR_OFFSET,            \
+                        __VA_ARGS__);                                          \
         CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                  \
       }                                                                        \
       [[clang::nomerge]] {                                                     \
       NativeWeak:                                                              \
-        FN_TABLE[4](METADATA, READER, ADDR_OFFSET, __VA_ARGS__);               \
+        LS_CALL_HANDLER(FN_TABLE, 4, METADATA, READER, ADDR_OFFSET,            \
+                        __VA_ARGS__);                                          \
         CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                  \
       }                                                                        \
       [[clang::nomerge]] {                                                     \
       Unknown:                                                                 \
-        FN_TABLE[5](METADATA, READER, ADDR_OFFSET, __VA_ARGS__);               \
+        LS_CALL_HANDLER(FN_TABLE, 5, METADATA, READER, ADDR_OFFSET,            \
+                        __VA_ARGS__);                                          \
         CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                  \
       }                                                                        \
       [[clang::nomerge]] {                                                     \
       UnknownUnowned:                                                          \
-        FN_TABLE[6](METADATA, READER, ADDR_OFFSET, __VA_ARGS__);               \
+        LS_CALL_HANDLER(FN_TABLE, 6, METADATA, READER, ADDR_OFFSET,            \
+                        __VA_ARGS__);                                          \
         CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                  \
       }                                                                        \
       [[clang::nomerge]] {                                                     \
       UnknownWeak:                                                             \
-        FN_TABLE[7](METADATA, READER, ADDR_OFFSET, __VA_ARGS__);               \
+        LS_CALL_HANDLER(FN_TABLE, 7, METADATA, READER, ADDR_OFFSET,            \
+                        __VA_ARGS__);                                          \
         CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                  \
       }                                                                        \
       [[clang::nomerge]] {                                                     \
       Bridge:                                                                  \
-        FN_TABLE[8](METADATA, READER, ADDR_OFFSET, __VA_ARGS__);               \
+        LS_CALL_HANDLER(FN_TABLE, 8, METADATA, READER, ADDR_OFFSET,            \
+                        __VA_ARGS__);                                          \
         CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                  \
       }                                                                        \
       [[clang::nomerge]] {                                                     \
       Block:                                                                   \
-        FN_TABLE[9](METADATA, READER, ADDR_OFFSET, __VA_ARGS__);               \
+        LS_CALL_HANDLER(FN_TABLE, 9, METADATA, READER, ADDR_OFFSET,            \
+                        __VA_ARGS__);                                          \
         CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                  \
       }                                                                        \
       [[clang::nomerge]] {                                                     \
       ObjC:                                                                    \
-        FN_TABLE[10](METADATA, READER, ADDR_OFFSET, __VA_ARGS__);              \
+        LS_CALL_HANDLER(FN_TABLE, 10, METADATA, READER, ADDR_OFFSET,           \
+                        __VA_ARGS__);                                          \
         CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                  \
       }                                                                        \
       [[clang::nomerge]] {                                                     \
       NativeSwiftObjC:                                                         \
-        FN_TABLE[11](METADATA, READER, ADDR_OFFSET, __VA_ARGS__);              \
+        LS_CALL_HANDLER(FN_TABLE, 11, METADATA, READER, ADDR_OFFSET,           \
+                        __VA_ARGS__);                                          \
         CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                  \
       }                                                                        \
       [[clang::nomerge]] {                                                     \
       Metatype:                                                                \
-        FN_TABLE[12](METADATA, READER, ADDR_OFFSET, __VA_ARGS__);              \
+        LS_CALL_HANDLER(FN_TABLE, 12, METADATA, READER, ADDR_OFFSET,           \
+                        __VA_ARGS__);                                          \
         CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                  \
       }                                                                        \
       [[clang::nomerge]] {                                                     \
@@ -550,21 +576,20 @@ struct LayoutStringResumeStack {
       }                                                                        \
       [[clang::nomerge]] {                                                     \
       Existential:                                                             \
-        FN_TABLE[14](METADATA, READER, ADDR_OFFSET, __VA_ARGS__);              \
+        LS_CALL_HANDLER(FN_TABLE, 14, METADATA, READER, ADDR_OFFSET,           \
+                        __VA_ARGS__);                                          \
         CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                  \
       }                                                                        \
       [[clang::nomerge]] {                                                     \
       Resilient:                                                               \
-        FN_TABLE[15](METADATA, READER, ADDR_OFFSET, __VA_ARGS__);              \
+        LS_CALL_HANDLER(FN_TABLE, 15, METADATA, READER, ADDR_OFFSET,           \
+                        __VA_ARGS__);                                          \
         CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                  \
       }                                                                        \
       [[clang::nomerge]] {                                                     \
       Default:                                                                 \
-        uintptr_t _ADDR_OFFSET = ADDR_OFFSET;                                  \
-        LayoutStringReader1 _READER = READER;                                  \
-        FN_TABLE[TAG](METADATA, _READER, _ADDR_OFFSET, __VA_ARGS__);           \
-        READER = _READER;                                                      \
-        ADDR_OFFSET = _ADDR_OFFSET;                                            \
+        LS_CALL_HANDLER(FN_TABLE, TAG, METADATA, READER, ADDR_OFFSET,          \
+                        __VA_ARGS__);                                          \
         CONTINUE(METADATA, READER, ADDR_OFFSET, __VA_ARGS__);                  \
       }                                                                        \
       LS_HAND_OFF_##MODE(NESTED_FN, METADATA, READER, ADDR_OFFSET,             \
