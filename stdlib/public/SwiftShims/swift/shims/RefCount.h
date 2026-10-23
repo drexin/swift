@@ -643,9 +643,37 @@ class RefCountBitsT {
 
 typedef RefCountBitsT<RefCountIsInline> InlineRefCountBits;
 
+// The weak reference count of SideTableRefCountBits, followed by the bytes that
+// would otherwise be padding at its end, as a member that is always 0:
+// compare_exchange compares all bytes of the value, and left as padding, these
+// bytes of the expected value were whatever a register held, so that the first
+// compare-and-swap of an update usually failed. With 16-bit pointers there is
+// no padding.
+template <size_t PaddingSize>
+struct SideTableWeakBits {
+  uint32_t weakBits;
+  uint8_t padding[PaddingSize] = {};
+};
+
+template <>
+struct SideTableWeakBits<0> {
+  uint32_t weakBits;
+};
+
+constexpr size_t SideTableRefCountBitsAlignment =
+    sizeof(void *) * 2 > alignof(RefCountBitsT<RefCountNotInline>)
+        ? sizeof(void *) * 2
+        : alignof(RefCountBitsT<RefCountNotInline>);
+constexpr size_t SideTableRefCountBitsDataSize =
+    sizeof(RefCountBitsT<RefCountNotInline>) + sizeof(uint32_t);
+constexpr size_t SideTableRefCountBitsPaddingSize =
+    (SideTableRefCountBitsDataSize + SideTableRefCountBitsAlignment - 1) /
+        SideTableRefCountBitsAlignment * SideTableRefCountBitsAlignment -
+    SideTableRefCountBitsDataSize;
+
 class alignas(sizeof(void*) * 2) SideTableRefCountBits : public RefCountBitsT<RefCountNotInline>
 {
-  uint32_t weakBits;
+  SideTableWeakBits<SideTableRefCountBitsPaddingSize> weak;
 
   public:
     SWIFT_ALWAYS_INLINE
@@ -657,28 +685,28 @@ class alignas(sizeof(void*) * 2) SideTableRefCountBits : public RefCountBitsT<Re
         : RefCountBitsT<RefCountNotInline>(strongExtraCount, unownedCount)
           // weak refcount starts at 1 on behalf of the unowned count
           ,
-          weakBits(1) {}
+          weak{1} {}
 
     SWIFT_ALWAYS_INLINE
     SideTableRefCountBits(HeapObjectSideTableEntry *side) = delete;
 
     SWIFT_ALWAYS_INLINE
     SideTableRefCountBits(InlineRefCountBits newbits)
-        : RefCountBitsT<RefCountNotInline>(&newbits), weakBits(1) {}
+        : RefCountBitsT<RefCountNotInline>(&newbits), weak{1} {}
 
     SWIFT_ALWAYS_INLINE
-    void incrementWeakRefCount(uint32_t inc = 1) { weakBits += inc; }
+    void incrementWeakRefCount(uint32_t inc = 1) { weak.weakBits += inc; }
 
     SWIFT_ALWAYS_INLINE
     bool decrementWeakRefCount(uint32_t dec = 1) {
-      assert(weakBits >= dec);
-      weakBits -= dec;
-      return weakBits == 0;
+      assert(weak.weakBits >= dec);
+      weak.weakBits -= dec;
+      return weak.weakBits == 0;
   }
 
   SWIFT_ALWAYS_INLINE
   uint32_t getWeakRefCount() {
-    return weakBits;
+    return weak.weakBits;
   }
 
   // Side table ref count never has a side table of its own.
@@ -687,6 +715,9 @@ class alignas(sizeof(void*) * 2) SideTableRefCountBits : public RefCountBitsT<Re
     return false;
   }
 };
+
+static_assert(std::has_unique_object_representations<SideTableRefCountBits>::value,
+              "SideTableRefCountBits must not have padding; see SideTableWeakBits");
 
 
 // Barriers
