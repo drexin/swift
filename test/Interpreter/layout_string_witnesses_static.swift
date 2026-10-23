@@ -1318,6 +1318,72 @@ func testDeepNestedMultiPayloadEnum() {
 
 testDeepNestedMultiPayloadEnum()
 
+// assignWithCopy of multi-payload enums across a change of case, between cases
+// whose payloads have the same ref counts (all cases of an indirect enum, which
+// are a box, and a and b of SameLayoutPayloads), cases with other payloads, and
+// empty cases.
+indirect enum IndirectTree {
+    case leaf(DeepNestTracked)
+    case pair(IndirectTree, IndirectTree)
+    case labeled(String, DeepNestTracked)
+    case empty
+}
+
+enum SameLayoutPayloads {
+    case a(DeepNestTracked, Int)
+    case b(DeepNestTracked, Int)
+    case c(String, DeepNestTracked)
+    case d
+}
+
+struct SameLayoutWrapper {
+    let tree: IndirectTree
+    let payloads: SameLayoutPayloads
+    let x: DeepNestTracked
+}
+
+func makeSameLayoutWrapper(_ id: Int, _ shape: Int) -> SameLayoutWrapper {
+    let tree: IndirectTree
+    switch shape % 4 {
+    case 0: tree = .leaf(DeepNestTracked(id))
+    case 1: tree = .pair(.leaf(DeepNestTracked(id + 1)), .empty)
+    case 2: tree = .labeled("heap string label number \(id)", DeepNestTracked(id + 2))
+    default: tree = .empty
+    }
+    let payloads: SameLayoutPayloads
+    switch shape % 4 {
+    case 0: payloads = .a(DeepNestTracked(id + 3), id)
+    case 1: payloads = .b(DeepNestTracked(id + 4), id + 1)
+    case 2: payloads = .c("heap string payload number \(id)", DeepNestTracked(id + 5))
+    default: payloads = .d
+    }
+    return SameLayoutWrapper(tree: tree, payloads: payloads, x: DeepNestTracked(id + 6))
+}
+
+func testSameLayoutPayloadCaseChange() {
+    var mismatches = 0
+    let ptr = UnsafeMutablePointer<SameLayoutWrapper>.allocate(capacity: 1)
+    for i in 0..<4 {
+        for j in 0..<4 {
+            let x = makeSameLayoutWrapper(100 * i, i)
+            let y = makeSameLayoutWrapper(100 * j + 50, j)
+            testInitCopyValue(ptr, from: x)
+            testAssignCopyValue(ptr, from: y)
+            if String(describing: ptr.pointee) != String(describing: y) {
+                mismatches += 1
+                print("\(i) <- \(j): \(ptr.pointee) != \(y)")
+            }
+            testDestroy(ptr)
+        }
+    }
+    ptr.deallocate()
+
+    // CHECK-NEXT: same layout payload case change: mismatches: 0, live: 0
+    print("same layout payload case change: mismatches: \(mismatches), live: \(deepNestTrackedLive)")
+}
+
+testSameLayoutPayloadCaseChange()
+
 struct MyError: Error {
     let x: SimpleClass
 }
