@@ -1604,14 +1604,30 @@ SWIFT_NOINLINE static void destroySlow(const Metadata *metadata,
     destroyRefCounts(metadata, resumeReader, resumeAddrOffset, addr);
 }
 
+// Runs the destroy handler of a single-payload enum, which skips its payload's
+// ref counts if it's in an empty case, and returns where the walk continues. It
+// takes the reader and offset by value and returns them, so that destroyFast
+// can keep them in registers across the call.
+struct LayoutStringPosition {
+  LayoutStringReader1 reader;
+  uintptr_t addrOffset;
+};
+SWIFT_NOINLINE static LayoutStringPosition skipSinglePayloadEnumForDestroy(
+    const Metadata *metadata, LayoutStringReader1 reader, uintptr_t addrOffset,
+    uint8_t *addr, uint64_t kind) {
+  destroyTable[kind](metadata, reader, addrOffset, addr);
+  return {reader, addrOffset};
+}
+
 // Destroys a value with a walk that handles only the most common kinds, so that
 // it needs few registers and saves as few callee-saved registers as possible:
 // End, native strong references, native and tagged bridge objects, blocks,
-// existentials and multi-payload enums one level deep. It calls nothing with
-// the standard calling convention except an enum's getEnumTag, _Block_release
-// and the destroy witness of a value inline in an existential; the ref
-// counting slow paths are preserve_most. For anything else, it hands off to destroySlow at the
-// current tag.
+// existentials, single-payload enums and multi-payload enums one level deep. It
+// calls nothing with the standard calling convention except an enum's
+// getEnumTag, the table handlers of single-payload enums, _Block_release and
+// the destroy witness of a value inline in an existential; the ref counting
+// slow paths are preserve_most. For anything else, it hands off to destroySlow
+// at the current tag.
 //
 // It is noinline so that hot/cold splitting leaves it alone: outlined cold code
 // is called with the standard calling convention, which would force saving
@@ -1633,7 +1649,8 @@ SWIFT_NOINLINE static void destroyFast(const Metadata *metadata,
       &&Slow, &&Slow,                 &&Slow,         &&Slow,
       &&Bridge, &&Block,              &&Slow,         &&Slow,
       &&Slow, &&Slow,                 &&Existential,  &&Slow,
-      &&Slow, &&Slow,                 &&Slow,         &&Slow,
+      &&SinglePayloadEnum,            &&SinglePayloadEnum,
+      &&SinglePayloadEnum,            &&SinglePayloadEnum,
       &&MultiPayloadEnumFN, &&MultiPayloadEnumFNResolved,
       &&MultiPayloadEnumGeneric,
   };
@@ -1723,6 +1740,17 @@ Existential:
       type->vw_destroy(object);
     else
       layoutStringRelease(*(HeapObject **)object);
+    DESTROY_FAST_NEXT();
+  }
+
+SinglePayloadEnum:
+  {
+    // The handlers only decide whether to skip the payload's ref counts, so
+    // they don't need the general walk.
+    auto next = skipSinglePayloadEnumForDestroy(metadata, reader, addrOffset,
+                                                addr, tag >> 56);
+    reader = next.reader;
+    addrOffset = next.addrOffset;
     DESTROY_FAST_NEXT();
   }
 
